@@ -30,96 +30,134 @@ TEMPLATE = _jinja_env.from_string("""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SF Permitting Bottleneck Analyzer</title>
+<script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f6fa; color: #2c3e50; }
-  .header { background: #1a5276; color: white; padding: 20px 32px; }
-  .header h1 { font-size: 1.5rem; font-weight: 700; }
-  .header p { opacity: 0.8; font-size: 0.9rem; margin-top: 4px; }
-  .container { max-width: 1400px; margin: 0 auto; padding: 20px 32px; }
-  .filters { background: white; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; display: flex; gap: 20px; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); flex-wrap: wrap; }
-  .filters label { font-weight: 600; font-size: 0.85rem; color: #7f8c8d; }
-  .filters select, .filters input { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
-  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
-  .kpi { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-left: 4px solid #3498db; }
-  .kpi.warn { border-left-color: #f39c12; }
-  .kpi.danger { border-left-color: #e74c3c; }
-  .kpi-value { font-size: 2rem; font-weight: 700; }
-  .kpi-label { font-size: 0.85rem; color: #7f8c8d; margin-top: 4px; }
-  .tabs { display: flex; gap: 0; margin-bottom: 0; }
-  .tab { padding: 10px 24px; cursor: pointer; font-weight: 600; color: #7f8c8d; border-bottom: 3px solid transparent; transition: all 0.15s; }
-  .tab:hover { color: #2c3e50; }
-  .tab.active { color: #1a5276; border-bottom-color: #1a5276; }
-  .tab-content { background: white; border-radius: 0 8px 8px 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); min-height: 400px; }
-  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
-  table { border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 0.85rem; }
-  th { background: #2c3e50; color: white; padding: 8px 12px; text-align: left; }
-  td { padding: 8px 12px; border-bottom: 1px solid #eee; }
-  tr:hover { background: #f8f9fa; }
-  .section-title { font-size: 1.1rem; font-weight: 600; margin: 20px 0 8px; }
-  .section-subtitle { color: #7f8c8d; font-size: 0.85rem; margin-bottom: 12px; }
-  .loading { text-align: center; padding: 60px; color: #95a5a6; }
-  @media (max-width: 768px) { .kpi-grid { grid-template-columns: 1fr 1fr; } .chart-row { grid-template-columns: 1fr; } }
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        navy: { 50: '#f0f5fa', 100: '#d9e6f2', 500: '#1a5276', 600: '#154360', 700: '#0e2f46', 800: '#0a1f2e' },
+      }
+    }
+  }
+}
+</script>
+<style type="text/tailwindcss">
+  @layer components {
+    .kpi-card { @apply bg-white rounded-xl p-5 shadow-sm border-l-4 transition-all duration-200 hover:shadow-md; }
+    .filter-input { @apply block w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 focus:outline-none transition-colors; }
+    .data-table { @apply w-full text-sm text-left; }
+    .data-table th { @apply bg-gray-800 text-white px-4 py-3 font-medium first:rounded-tl-lg last:rounded-tr-lg; }
+    .data-table td { @apply px-4 py-3 border-b border-gray-100; }
+    .data-table tr:hover td { @apply bg-gray-50; }
+    .tab-btn { @apply px-5 py-2.5 text-sm font-semibold text-gray-400 border-b-2 border-transparent cursor-pointer transition-all duration-150 hover:text-gray-600; }
+    .tab-btn.active { @apply text-navy-500 border-navy-500; }
+    .badge { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium; }
+    .badge-red { @apply bg-red-50 text-red-700 ring-1 ring-red-600/20; }
+    .badge-green { @apply bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20; }
+  }
 </style>
 </head>
-<body>
+<body class="bg-gray-50 text-gray-900 antialiased">
 
-<div class="header">
-  <h1>SF Permitting Bottleneck Analyzer</h1>
-  <p>Making San Francisco's housing permitting pipeline transparent. Data: DBI Building Permits ({{ kpis.total_permits | comma }} permits).</p>
-</div>
-
-<div class="container">
-
-  <div class="filters">
+<!-- Header -->
+<header class="bg-navy-500 text-white">
+  <div class="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
     <div>
-      <label>District</label><br>
-      <select id="f-district" onchange="refresh()">
+      <h1 class="text-xl font-bold tracking-tight">SF Permitting Bottleneck Analyzer</h1>
+      <p class="text-navy-50/80 text-sm mt-0.5">Making San Francisco's housing permitting pipeline transparent</p>
+    </div>
+    <div class="text-right text-sm text-navy-50/60">
+      <div>{{ kpis.total_permits | comma }} permits analyzed</div>
+      <div>DBI Building Permits &middot; SF Open Data</div>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6">
+
+  <!-- Filters -->
+  <div class="bg-white rounded-xl shadow-sm p-4 mb-6 flex flex-wrap items-end gap-4">
+    <div class="flex items-center gap-1.5 text-sm font-semibold text-gray-500 uppercase tracking-wider">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
+      Filters
+    </div>
+    <div class="flex-1 min-w-[140px]">
+      <label class="block text-xs font-medium text-gray-500 mb-1">Supervisor District</label>
+      <select id="f-district" onchange="refresh()" class="filter-input">
         <option value="">All Districts</option>
         {% for d in filters.districts %}<option value="{{ d }}">District {{ d }}</option>{% endfor %}
       </select>
     </div>
-    <div>
-      <label>Year From</label><br>
-      <input type="number" id="f-year-min" value="{{ filters.min_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" style="width:80px">
+    <div class="w-24">
+      <label class="block text-xs font-medium text-gray-500 mb-1">Year From</label>
+      <input type="number" id="f-year-min" value="{{ filters.min_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" class="filter-input">
     </div>
-    <div>
-      <label>Year To</label><br>
-      <input type="number" id="f-year-max" value="{{ filters.max_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" style="width:80px">
+    <div class="w-24">
+      <label class="block text-xs font-medium text-gray-500 mb-1">Year To</label>
+      <input type="number" id="f-year-max" value="{{ filters.max_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" class="filter-input">
     </div>
-    <div>
-      <label>Housing Only</label><br>
-      <select id="f-housing" onchange="refresh()">
+    <div class="w-32">
+      <label class="block text-xs font-medium text-gray-500 mb-1">Housing Only</label>
+      <select id="f-housing" onchange="refresh()" class="filter-input">
         <option value="1" selected>Yes</option>
         <option value="0">No</option>
       </select>
     </div>
   </div>
 
-  <div class="kpi-grid" id="kpi-grid">
-    <div class="kpi"><div class="kpi-value" id="kpi-permits">{{ kpis.total_permits | comma }}</div><div class="kpi-label">Housing Permits</div></div>
-    <div class="kpi warn"><div class="kpi-value" id="kpi-days">{{ kpis.median_days_to_issue }}</div><div class="kpi-label">Median Days to Issue</div></div>
-    <div class="kpi danger"><div class="kpi-value" id="kpi-stuck">{{ kpis.stuck_count | comma }}</div><div class="kpi-label">Stuck Permits (&gt;1yr)</div></div>
-    <div class="kpi danger"><div class="kpi-value" id="kpi-units">{{ kpis.stuck_units | comma }}</div><div class="kpi-label">Housing Units Blocked</div></div>
+  <!-- KPIs -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="kpi-card border-blue-500">
+      <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Housing Permits</p>
+      <p class="text-3xl font-bold text-gray-900 mt-1" id="kpi-permits">{{ kpis.total_permits | comma }}</p>
+      <p class="text-xs text-gray-400 mt-1">Total in filtered dataset</p>
+    </div>
+    <div class="kpi-card border-amber-500">
+      <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Median Days to Issue</p>
+      <p class="text-3xl font-bold text-amber-600 mt-1" id="kpi-days">{{ kpis.median_days_to_issue }}</p>
+      <p class="text-xs text-gray-400 mt-1">Filed &rarr; permit issued</p>
+    </div>
+    <div class="kpi-card border-red-500">
+      <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Stuck Permits</p>
+      <p class="text-3xl font-bold text-red-600 mt-1" id="kpi-stuck">{{ kpis.stuck_count | comma }}</p>
+      <p class="text-xs text-gray-400 mt-1">Filed &gt;1 year, not issued</p>
+    </div>
+    <div class="kpi-card border-red-500">
+      <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Units Blocked</p>
+      <p class="text-3xl font-bold text-red-600 mt-1" id="kpi-units">{{ kpis.stuck_units | comma }}</p>
+      <p class="text-xs text-gray-400 mt-1">Housing units that can't break ground</p>
+    </div>
   </div>
 
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('bottlenecks')">Bottlenecks</div>
-    <div class="tab" onclick="switchTab('trends')">Trends</div>
-    <div class="tab" onclick="switchTab('districts')">District Scorecard</div>
-    <div class="tab" onclick="switchTab('stuck')">Stuck Permits</div>
+  <!-- Tabs -->
+  <div class="flex border-b border-gray-200 mb-0">
+    <button class="tab-btn active" onclick="switchTab('bottlenecks', this)">Bottlenecks</button>
+    <button class="tab-btn" onclick="switchTab('trends', this)">Trends</button>
+    <button class="tab-btn" onclick="switchTab('districts', this)">District Scorecard</button>
+    <button class="tab-btn" onclick="switchTab('stuck', this)">Stuck Permits</button>
   </div>
 
-  <div class="tab-content" id="tab-content">
-    <div class="loading">Loading...</div>
+  <!-- Tab content -->
+  <div id="tab-content" class="bg-white rounded-b-xl shadow-sm p-6 min-h-[420px]">
+    <div class="flex items-center justify-center h-64 text-gray-400">
+      <svg class="animate-spin h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+      Loading...
+    </div>
   </div>
 
-</div>
+</main>
+
+<footer class="max-w-7xl mx-auto px-6 py-6 text-center text-xs text-gray-400">
+  Data: <a href="https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9" class="underline hover:text-gray-600">SF Open Data &mdash; DBI Building Permits</a>
+  &middot; Built for policymakers by <a href="https://github.com/candacelabs/sf_housing_permit_transparency" class="underline hover:text-gray-600">candacelabs</a>
+</footer>
 
 <script>
 let currentTab = 'bottlenecks';
 const comma = n => n == null ? 'N/A' : Number(n).toLocaleString();
+const spinner = `<div class="flex items-center justify-center h-64 text-gray-400"><svg class="animate-spin h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Loading...</div>`;
 
 function getFilters() {
   const d = document.getElementById('f-district').value;
@@ -133,27 +171,38 @@ function getFilters() {
 
 async function refresh() {
   const q = getFilters();
-  // Update KPIs
   const kpis = await (await fetch('/api/kpis?' + q)).json();
   document.getElementById('kpi-permits').textContent = comma(kpis.total_permits);
   document.getElementById('kpi-days').textContent = kpis.median_days_to_issue ?? 'N/A';
   document.getElementById('kpi-stuck').textContent = comma(kpis.stuck_count);
   document.getElementById('kpi-units').textContent = comma(kpis.stuck_units);
-  // Update current tab
   loadTab(currentTab);
 }
 
-function switchTab(tab) {
+function switchTab(tab, el) {
   currentTab = tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(t => t.classList.remove('active'));
+  if (el) el.classList.add('active');
   loadTab(tab);
+}
+
+function makeTable(headers, rows) {
+  let h = '<div class="overflow-x-auto mt-4"><table class="data-table"><thead><tr>';
+  for (const th of headers) h += `<th>${th}</th>`;
+  h += '</tr></thead><tbody>';
+  for (const row of rows) {
+    h += '<tr>';
+    for (const td of row) h += `<td>${td}</td>`;
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  return h;
 }
 
 async function loadTab(tab) {
   const q = getFilters();
   const el = document.getElementById('tab-content');
-  el.innerHTML = '<div class="loading">Loading...</div>';
+  el.innerHTML = spinner;
 
   if (tab === 'bottlenecks') {
     const [stages, districts, types] = await Promise.all([
@@ -161,10 +210,17 @@ async function loadTab(tab) {
       fetch('/api/by_district?' + q).then(r => r.json()),
       fetch('/api/by_permit_type?' + q).then(r => r.json()),
     ]);
-    el.innerHTML = '<div id="chart-stages"></div><div class="chart-row"><div id="chart-districts"></div><div id="chart-types"></div></div>';
-    Plotly.newPlot('chart-stages', stages.data, stages.layout, {responsive: true});
-    Plotly.newPlot('chart-districts', districts.data, districts.layout, {responsive: true});
-    Plotly.newPlot('chart-types', types.data, types.layout, {responsive: true});
+    el.innerHTML = `
+      <h3 class="text-lg font-semibold text-gray-800">Where Do Permits Get Stuck?</h3>
+      <p class="text-sm text-gray-500 mb-4">Processing time distribution across pipeline stages</p>
+      <div id="chart-stages"></div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        <div id="chart-districts"></div>
+        <div id="chart-types"></div>
+      </div>`;
+    Plotly.newPlot('chart-stages', stages.data, {...stages.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
+    Plotly.newPlot('chart-districts', districts.data, {...districts.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
+    Plotly.newPlot('chart-types', types.data, {...types.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
   }
   else if (tab === 'trends') {
     const [quarterly, volume, impact] = await Promise.all([
@@ -172,50 +228,76 @@ async function loadTab(tab) {
       fetch('/api/annual_volume?' + q).then(r => r.json()),
       fetch('/api/policy_impact').then(r => r.json()),
     ]);
-    el.innerHTML = '<div id="chart-quarterly"></div><div id="chart-volume"></div><h3 class="section-title" style="margin-top:24px">Policy Impact Analysis</h3><p class="section-subtitle">Did key policy changes actually speed things up?</p><div id="policy-table"></div>';
-    Plotly.newPlot('chart-quarterly', quarterly.data, quarterly.layout, {responsive: true});
-    Plotly.newPlot('chart-volume', volume.data, volume.layout, {responsive: true});
-    // Render policy impact table
-    let html = '<table><tr><th>Date</th><th>Event</th><th>Median Before</th><th>Median After</th><th>Change</th></tr>';
-    for (const p of impact) {
-      const color = p.pct_change != null ? (p.pct_change < 0 ? 'color:#27ae60' : 'color:#e74c3c') : '';
-      html += '<tr><td>' + p.date + '</td><td>' + p.event + '</td><td>' + (p.median_before ?? '-') + '</td><td>' + (p.median_after ?? '-') + '</td><td style="' + color + '">' + (p.pct_change != null ? p.pct_change + '%' : '-') + '</td></tr>';
-    }
-    html += '</table>';
-    document.getElementById('policy-table').innerHTML = html;
+    el.innerHTML = `
+      <h3 class="text-lg font-semibold text-gray-800">How Have Processing Times Changed?</h3>
+      <p class="text-sm text-gray-500 mb-4">Quarterly and annual trends with key policy milestones</p>
+      <div id="chart-quarterly"></div>
+      <div id="chart-volume" class="mt-6"></div>
+      <h3 class="text-lg font-semibold text-gray-800 mt-8">Policy Impact Analysis</h3>
+      <p class="text-sm text-gray-500 mb-2">Did key policy changes actually speed things up?</p>
+      <div id="policy-table"></div>`;
+    Plotly.newPlot('chart-quarterly', quarterly.data, {...quarterly.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
+    Plotly.newPlot('chart-volume', volume.data, {...volume.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
+    const rows = impact.map(p => {
+      const badge = p.pct_change != null
+        ? (p.pct_change < 0 ? `<span class="badge badge-green">${p.pct_change}%</span>` : `<span class="badge badge-red">+${p.pct_change}%</span>`)
+        : '-';
+      return [p.date, p.event, p.median_before ?? '-', p.median_after ?? '-', badge];
+    });
+    document.getElementById('policy-table').innerHTML = makeTable(['Date','Event','Median Before (days)','Median After (days)','Change'], rows);
   }
   else if (tab === 'districts') {
     const [scorecard, stuckDist] = await Promise.all([
       fetch('/api/by_district?' + q).then(r => r.json()),
       fetch('/api/stuck_by_district?' + q).then(r => r.json()),
     ]);
-    el.innerHTML = '<div id="chart-scorecard"></div><div id="chart-stuck-dist"></div><h3 class="section-title">Detailed Scorecard</h3><div id="scorecard-table"></div>';
-    Plotly.newPlot('chart-scorecard', scorecard.data, scorecard.layout, {responsive: true});
-    Plotly.newPlot('chart-stuck-dist', stuckDist.data, stuckDist.layout, {responsive: true});
-    // Table
+    el.innerHTML = `
+      <h3 class="text-lg font-semibold text-gray-800">District Scorecard</h3>
+      <p class="text-sm text-gray-500 mb-4">How does each Supervisor District compare?</p>
+      <div id="chart-scorecard"></div>
+      <div id="chart-stuck-dist" class="mt-6"></div>
+      <h3 class="text-lg font-semibold text-gray-800 mt-8">Detailed Scorecard</h3>
+      <div id="scorecard-table"></div>`;
+    Plotly.newPlot('chart-scorecard', scorecard.data, {...scorecard.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
+    Plotly.newPlot('chart-stuck-dist', stuckDist.data, {...stuckDist.layout, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
     const data = await fetch('/api/district_table?' + q).then(r => r.json());
-    let html = '<table><tr><th>District</th><th>Median Days</th><th>Permits</th><th>Units Proposed</th></tr>';
-    for (const r of data) html += '<tr><td>' + r.district + '</td><td>' + (r.median_days?.toFixed(1) ?? '-') + '</td><td>' + comma(r.permits) + '</td><td>' + comma(r.units_proposed) + '</td></tr>';
-    html += '</table>';
-    document.getElementById('scorecard-table').innerHTML = html;
+    const rows = data.map(r => [r.district, r.median_days?.toFixed(1) ?? '-', comma(r.permits), comma(r.units_proposed)]);
+    document.getElementById('scorecard-table').innerHTML = makeTable(['District','Median Days','Permits','Units Proposed'], rows);
   }
   else if (tab === 'stuck') {
     const [stuck, kpis] = await Promise.all([
       fetch('/api/stuck_list?' + q).then(r => r.json()),
       fetch('/api/kpis?' + q).then(r => r.json()),
     ]);
-    el.innerHTML = '<h3 class="section-title">' + comma(kpis.stuck_count) + ' Permits Stuck in the Pipeline</h3><p class="section-subtitle">Filed over a year ago, still not issued. Representing ' + comma(kpis.stuck_units) + ' potential housing units.</p><div id="stuck-table"></div>';
-    let html = '<table><tr><th>Permit</th><th>Filed</th><th>Status</th><th>Days Waiting</th><th>District</th><th>Neighborhood</th><th>Units</th><th>Description</th></tr>';
-    for (const r of stuck) {
+    el.innerHTML = `
+      <div class="flex items-start gap-4 mb-6">
+        <div class="flex-shrink-0 w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
+          <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+        </div>
+        <div>
+          <h3 class="text-lg font-semibold text-gray-800">${comma(kpis.stuck_count)} Permits Stuck in the Pipeline</h3>
+          <p class="text-sm text-gray-500">Filed over a year ago and still not issued, representing <span class="font-semibold text-red-600">${comma(kpis.stuck_units)} potential housing units</span>.</p>
+        </div>
+      </div>
+      <div id="stuck-table"></div>`;
+    const rows = stuck.map(r => {
       const filed = r.filed_date ? new Date(r.filed_date).toISOString().slice(0,10) : '-';
-      html += '<tr><td>' + (r.permit_number ?? '') + '</td><td>' + filed + '</td><td>' + (r.status ?? '') + '</td><td>' + comma(r.days_waiting) + '</td><td>' + (r.district ?? '') + '</td><td>' + (r.neighborhood ?? '') + '</td><td>' + (r.units ?? '') + '</td><td>' + (r.description ?? '') + '</td></tr>';
-    }
-    html += '</table>';
-    document.getElementById('stuck-table').innerHTML = html;
+      const years = r.days_waiting ? (r.days_waiting / 365).toFixed(1) + 'y' : '';
+      return [
+        r.permit_number ?? '',
+        filed,
+        `<span class="badge ${r.status === 'Filed' ? 'badge-red' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-600/20'} text-xs">${r.status ?? ''}</span>`,
+        `${comma(r.days_waiting)} <span class="text-gray-400 text-xs">(${years})</span>`,
+        r.district ?? '',
+        `<span class="text-xs">${r.neighborhood ?? ''}</span>`,
+        r.units ?? '',
+        `<span class="text-xs text-gray-500">${(r.description ?? '').slice(0, 80)}</span>`,
+      ];
+    });
+    document.getElementById('stuck-table').innerHTML = makeTable(['Permit','Filed','Status','Days Waiting','District','Neighborhood','Units','Description'], rows);
   }
 }
 
-// Initial load
 loadTab('bottlenecks');
 </script>
 </body>
