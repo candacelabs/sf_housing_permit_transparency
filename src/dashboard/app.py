@@ -321,23 +321,23 @@ async function loadTab(tab) {
       return parts.join('. ') + '.';
     }
     function emailUrl(r) {
-      const subject = encodeURIComponent('Housing permits stuck in District ' + r.d + ' — ' + comma(Math.round(r.stuck_units)) + ' units blocked');
+      const subject = encodeURIComponent('Housing permits stuck in District ' + r.d + ' \\u2014 ' + comma(Math.round(r.stuck_units)) + ' units blocked');
       const body = encodeURIComponent(
-        'Dear Supervisor ' + r.supervisor + ',\n\n'
-        + 'I am writing as a concerned San Francisco resident about the housing permitting delays in District ' + r.d + '.\n\n'
-        + 'According to public DBI permit data:\n'
-        + '- ' + comma(r.stuck_permits) + ' housing permits in your district have been filed for over a year and still have not been issued.\n'
-        + '- These represent ' + comma(Math.round(r.stuck_units)) + ' housing units that cannot break ground.\n'
-        + '- An estimated ' + comma(Math.round(r.people_without_homes)) + ' people are without homes as a result.\n'
-        + '- The city has foregone approximately ' + money(r.property_tax_lost) + ' in property tax revenue.\n\n'
-        + 'I urge you to:\n'
-        + '1. Publicly account for why these permits are delayed.\n'
-        + '2. Support Mayor Lurie\'s plan to consolidate DBI, Planning, and PermitSF.\n'
-        + '3. Push for expedited processing of housing permits in District ' + r.d + '.\n\n'
-        + 'San Francisco\'s housing crisis demands action, not bureaucratic delay.\n\n'
-        + 'Data source: https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9\n'
-        + 'Dashboard: https://github.com/candacelabs/sf_housing_permit_transparency\n\n'
-        + 'Sincerely,\n[Your name]\n[Your address in District ' + r.d + ']'
+        'Dear Supervisor ' + r.supervisor + ',\\n\\n'
+        + 'I am writing as a concerned San Francisco resident about the housing permitting delays in District ' + r.d + '.\\n\\n'
+        + 'According to public DBI permit data:\\n'
+        + '- ' + comma(r.stuck_permits) + ' housing permits in your district have been filed for over a year and still have not been issued.\\n'
+        + '- These represent ' + comma(Math.round(r.stuck_units)) + ' housing units that cannot break ground.\\n'
+        + '- An estimated ' + comma(Math.round(r.people_without_homes)) + ' people are without homes as a result.\\n'
+        + '- The city has foregone approximately ' + money(r.property_tax_lost) + ' in property tax revenue.\\n\\n'
+        + 'I urge you to:\\n'
+        + '1. Publicly account for why these permits are delayed.\\n'
+        + '2. Support Mayor Lurie\\'s plan to consolidate DBI, Planning, and PermitSF.\\n'
+        + '3. Push for expedited processing of housing permits in District ' + r.d + '.\\n\\n'
+        + 'San Francisco\\'s housing crisis demands action, not bureaucratic delay.\\n\\n'
+        + 'Data source: https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9\\n'
+        + 'Dashboard: https://github.com/candacelabs/sf_housing_permit_transparency\\n\\n'
+        + 'Sincerely,\\n[Your name]\\n[Your address in District ' + r.d + ']'
       );
       return 'mailto:' + r.email + '?cc=Board.of.Supervisors@sfgov.org&subject=' + subject + '&body=' + body;
     }
