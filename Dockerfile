@@ -12,4 +12,4 @@ RUN uv sync --no-dev
 
 EXPOSE 8050
 
-CMD ["uv", "run", "python", "main.py", "pipeline"]
+CMD ["uv", "run", "python", "main.py", "dashboard"]

@@ -96,7 +96,7 @@ COUNTERFACTUAL = {
 # Dashboard settings
 DASH_HOST = os.environ.get("DASH_HOST", "0.0.0.0")
 DASH_PORT = 8050
-DASH_DEBUG = True
+DASH_DEBUG = os.environ.get("DASH_DEBUG", "0") == "1"
 
 
 # ---------------------------------------------------------------------------
