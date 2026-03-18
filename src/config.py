@@ -69,7 +69,7 @@ POLICY_MILESTONES = {
 }
 
 # Dashboard settings
-DASH_HOST = os.environ.get("DASH_HOST", "127.0.0.1")
+DASH_HOST = os.environ.get("DASH_HOST", "0.0.0.0")
 DASH_PORT = 8050
 DASH_DEBUG = True
 

@@ -1,528 +1,420 @@
-"""SF Permitting Bottleneck Analyzer — Interactive Dash Dashboard.
+"""SF Permitting Bottleneck Analyzer — FastAPI + Plotly.js dashboard.
 
-Designed for policymakers: clear, simple, impactful.
+All data queries go through DuckDB (20-120ms per query on 1.3M rows).
+The server starts instantly; computation happens per-request.
 """
+import json
 import logging
+from pathlib import Path
 
-import pandas as pd
+import plotly
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, callback, Input, Output, State
-import dash_bootstrap_components as dbc
-from pathlib import Path
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse
+from jinja2 import Environment
+
+from src.config import POLICY_MILESTONES
+from src.analysis import queries
 
 logger = logging.getLogger(__name__)
 
-from src.config import (
-    PROCESSED_DIR, DASH_HOST, DASH_PORT, DASH_DEBUG,
-    POLICY_MILESTONES, STAGE_DATE_COLUMNS,
-)
-from src.analysis.bottlenecks import (
-    stage_duration_summary, worst_bottlenecks, permit_status_breakdown,
-    stuck_permits, volume_analysis, district_scorecard,
-)
-from src.analysis.trends import (
-    quarterly_trends, annual_trends, policy_impact_analysis,
-)
+app = FastAPI(title="SF Permitting Bottleneck Analyzer")
+
+_jinja_env = Environment()
+_jinja_env.filters["comma"] = lambda v: f"{int(v):,}" if v is not None and v == v else str(v)
+
+TEMPLATE = _jinja_env.from_string("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SF Permitting Bottleneck Analyzer</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f6fa; color: #2c3e50; }
+  .header { background: #1a5276; color: white; padding: 20px 32px; }
+  .header h1 { font-size: 1.5rem; font-weight: 700; }
+  .header p { opacity: 0.8; font-size: 0.9rem; margin-top: 4px; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 20px 32px; }
+  .filters { background: white; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; display: flex; gap: 20px; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); flex-wrap: wrap; }
+  .filters label { font-weight: 600; font-size: 0.85rem; color: #7f8c8d; }
+  .filters select, .filters input { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .kpi { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-left: 4px solid #3498db; }
+  .kpi.warn { border-left-color: #f39c12; }
+  .kpi.danger { border-left-color: #e74c3c; }
+  .kpi-value { font-size: 2rem; font-weight: 700; }
+  .kpi-label { font-size: 0.85rem; color: #7f8c8d; margin-top: 4px; }
+  .tabs { display: flex; gap: 0; margin-bottom: 0; }
+  .tab { padding: 10px 24px; cursor: pointer; font-weight: 600; color: #7f8c8d; border-bottom: 3px solid transparent; transition: all 0.15s; }
+  .tab:hover { color: #2c3e50; }
+  .tab.active { color: #1a5276; border-bottom-color: #1a5276; }
+  .tab-content { background: white; border-radius: 0 8px 8px 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); min-height: 400px; }
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 0.85rem; }
+  th { background: #2c3e50; color: white; padding: 8px 12px; text-align: left; }
+  td { padding: 8px 12px; border-bottom: 1px solid #eee; }
+  tr:hover { background: #f8f9fa; }
+  .section-title { font-size: 1.1rem; font-weight: 600; margin: 20px 0 8px; }
+  .section-subtitle { color: #7f8c8d; font-size: 0.85rem; margin-bottom: 12px; }
+  .loading { text-align: center; padding: 60px; color: #95a5a6; }
+  @media (max-width: 768px) { .kpi-grid { grid-template-columns: 1fr 1fr; } .chart-row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>SF Permitting Bottleneck Analyzer</h1>
+  <p>Making San Francisco's housing permitting pipeline transparent. Data: DBI Building Permits ({{ kpis.total_permits | comma }} permits).</p>
+</div>
+
+<div class="container">
+
+  <div class="filters">
+    <div>
+      <label>District</label><br>
+      <select id="f-district" onchange="refresh()">
+        <option value="">All Districts</option>
+        {% for d in filters.districts %}<option value="{{ d }}">District {{ d }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Year From</label><br>
+      <input type="number" id="f-year-min" value="{{ filters.min_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" style="width:80px">
+    </div>
+    <div>
+      <label>Year To</label><br>
+      <input type="number" id="f-year-max" value="{{ filters.max_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" style="width:80px">
+    </div>
+    <div>
+      <label>Housing Only</label><br>
+      <select id="f-housing" onchange="refresh()">
+        <option value="1" selected>Yes</option>
+        <option value="0">No</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="kpi-grid" id="kpi-grid">
+    <div class="kpi"><div class="kpi-value" id="kpi-permits">{{ kpis.total_permits | comma }}</div><div class="kpi-label">Housing Permits</div></div>
+    <div class="kpi warn"><div class="kpi-value" id="kpi-days">{{ kpis.median_days_to_issue }}</div><div class="kpi-label">Median Days to Issue</div></div>
+    <div class="kpi danger"><div class="kpi-value" id="kpi-stuck">{{ kpis.stuck_count | comma }}</div><div class="kpi-label">Stuck Permits (&gt;1yr)</div></div>
+    <div class="kpi danger"><div class="kpi-value" id="kpi-units">{{ kpis.stuck_units | comma }}</div><div class="kpi-label">Housing Units Blocked</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('bottlenecks')">Bottlenecks</div>
+    <div class="tab" onclick="switchTab('trends')">Trends</div>
+    <div class="tab" onclick="switchTab('districts')">District Scorecard</div>
+    <div class="tab" onclick="switchTab('stuck')">Stuck Permits</div>
+  </div>
+
+  <div class="tab-content" id="tab-content">
+    <div class="loading">Loading...</div>
+  </div>
+
+</div>
+
+<script>
+let currentTab = 'bottlenecks';
+const comma = n => n == null ? 'N/A' : Number(n).toLocaleString();
+
+function getFilters() {
+  const d = document.getElementById('f-district').value;
+  const p = new URLSearchParams();
+  if (d) p.set('district', d);
+  p.set('year_min', document.getElementById('f-year-min').value);
+  p.set('year_max', document.getElementById('f-year-max').value);
+  p.set('housing_only', document.getElementById('f-housing').value);
+  return p.toString();
+}
+
+async function refresh() {
+  const q = getFilters();
+  // Update KPIs
+  const kpis = await (await fetch('/api/kpis?' + q)).json();
+  document.getElementById('kpi-permits').textContent = comma(kpis.total_permits);
+  document.getElementById('kpi-days').textContent = kpis.median_days_to_issue ?? 'N/A';
+  document.getElementById('kpi-stuck').textContent = comma(kpis.stuck_count);
+  document.getElementById('kpi-units').textContent = comma(kpis.stuck_units);
+  // Update current tab
+  loadTab(currentTab);
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  loadTab(tab);
+}
+
+async function loadTab(tab) {
+  const q = getFilters();
+  const el = document.getElementById('tab-content');
+  el.innerHTML = '<div class="loading">Loading...</div>';
+
+  if (tab === 'bottlenecks') {
+    const [stages, districts, types] = await Promise.all([
+      fetch('/api/stages?' + q).then(r => r.json()),
+      fetch('/api/by_district?' + q).then(r => r.json()),
+      fetch('/api/by_permit_type?' + q).then(r => r.json()),
+    ]);
+    el.innerHTML = '<div id="chart-stages"></div><div class="chart-row"><div id="chart-districts"></div><div id="chart-types"></div></div>';
+    Plotly.newPlot('chart-stages', stages.data, stages.layout, {responsive: true});
+    Plotly.newPlot('chart-districts', districts.data, districts.layout, {responsive: true});
+    Plotly.newPlot('chart-types', types.data, types.layout, {responsive: true});
+  }
+  else if (tab === 'trends') {
+    const [quarterly, volume, impact] = await Promise.all([
+      fetch('/api/quarterly?' + q).then(r => r.json()),
+      fetch('/api/annual_volume?' + q).then(r => r.json()),
+      fetch('/api/policy_impact').then(r => r.json()),
+    ]);
+    el.innerHTML = '<div id="chart-quarterly"></div><div id="chart-volume"></div><h3 class="section-title" style="margin-top:24px">Policy Impact Analysis</h3><p class="section-subtitle">Did key policy changes actually speed things up?</p><div id="policy-table"></div>';
+    Plotly.newPlot('chart-quarterly', quarterly.data, quarterly.layout, {responsive: true});
+    Plotly.newPlot('chart-volume', volume.data, volume.layout, {responsive: true});
+    // Render policy impact table
+    let html = '<table><tr><th>Date</th><th>Event</th><th>Median Before</th><th>Median After</th><th>Change</th></tr>';
+    for (const p of impact) {
+      const color = p.pct_change != null ? (p.pct_change < 0 ? 'color:#27ae60' : 'color:#e74c3c') : '';
+      html += '<tr><td>' + p.date + '</td><td>' + p.event + '</td><td>' + (p.median_before ?? '-') + '</td><td>' + (p.median_after ?? '-') + '</td><td style="' + color + '">' + (p.pct_change != null ? p.pct_change + '%' : '-') + '</td></tr>';
+    }
+    html += '</table>';
+    document.getElementById('policy-table').innerHTML = html;
+  }
+  else if (tab === 'districts') {
+    const [scorecard, stuckDist] = await Promise.all([
+      fetch('/api/by_district?' + q).then(r => r.json()),
+      fetch('/api/stuck_by_district?' + q).then(r => r.json()),
+    ]);
+    el.innerHTML = '<div id="chart-scorecard"></div><div id="chart-stuck-dist"></div><h3 class="section-title">Detailed Scorecard</h3><div id="scorecard-table"></div>';
+    Plotly.newPlot('chart-scorecard', scorecard.data, scorecard.layout, {responsive: true});
+    Plotly.newPlot('chart-stuck-dist', stuckDist.data, stuckDist.layout, {responsive: true});
+    // Table
+    const data = await fetch('/api/district_table?' + q).then(r => r.json());
+    let html = '<table><tr><th>District</th><th>Median Days</th><th>Permits</th><th>Units Proposed</th></tr>';
+    for (const r of data) html += '<tr><td>' + r.district + '</td><td>' + (r.median_days?.toFixed(1) ?? '-') + '</td><td>' + comma(r.permits) + '</td><td>' + comma(r.units_proposed) + '</td></tr>';
+    html += '</table>';
+    document.getElementById('scorecard-table').innerHTML = html;
+  }
+  else if (tab === 'stuck') {
+    const [stuck, kpis] = await Promise.all([
+      fetch('/api/stuck_list?' + q).then(r => r.json()),
+      fetch('/api/kpis?' + q).then(r => r.json()),
+    ]);
+    el.innerHTML = '<h3 class="section-title">' + comma(kpis.stuck_count) + ' Permits Stuck in the Pipeline</h3><p class="section-subtitle">Filed over a year ago, still not issued. Representing ' + comma(kpis.stuck_units) + ' potential housing units.</p><div id="stuck-table"></div>';
+    let html = '<table><tr><th>Permit</th><th>Filed</th><th>Status</th><th>Days Waiting</th><th>District</th><th>Neighborhood</th><th>Units</th><th>Description</th></tr>';
+    for (const r of stuck) {
+      const filed = r.filed_date ? new Date(r.filed_date).toISOString().slice(0,10) : '-';
+      html += '<tr><td>' + (r.permit_number ?? '') + '</td><td>' + filed + '</td><td>' + (r.status ?? '') + '</td><td>' + comma(r.days_waiting) + '</td><td>' + (r.district ?? '') + '</td><td>' + (r.neighborhood ?? '') + '</td><td>' + (r.units ?? '') + '</td><td>' + (r.description ?? '') + '</td></tr>';
+    }
+    html += '</table>';
+    document.getElementById('stuck-table').innerHTML = html;
+  }
+}
+
+// Initial load
+loadTab('bottlenecks');
+</script>
+</body>
+</html>""")
+
 
 # ---------------------------------------------------------------------------
-# Data loading
+# Template filters
 # ---------------------------------------------------------------------------
 
-def load_data() -> pd.DataFrame:
-    """Load cleaned building permits from parquet cache."""
-    path = PROCESSED_DIR / "building_permits.parquet"
-    if not path.exists():
-        raise FileNotFoundError(
-            f"No processed data at {path}. Run the pipeline first:\n"
-            "  uv run python -m src.ingestion.fetch\n"
-            "  uv run python -m src.ingestion.clean"
-        )
-    logger.info("Loading processed data from %s", path)
-    df = pd.read_parquet(path)
-    # Ensure date columns are datetime
-    for col in ["filed_date", "approved_date", "issued_date", "completed_date"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-    return df
+def _comma(v):
+    try:
+        return f"{int(v):,}"
+    except (ValueError, TypeError):
+        return str(v)
+
+
+def _to_json(fig):
+    """Convert a Plotly figure to JSON dict with data + layout."""
+    return json.loads(plotly.io.to_json(fig))
 
 
 # ---------------------------------------------------------------------------
-# App setup
+# HTML page
 # ---------------------------------------------------------------------------
 
-app = Dash(
-    __name__,
-    external_stylesheets=[dbc.themes.FLATLY],
-    title="SF Permitting Bottleneck Analyzer",
-    suppress_callback_exceptions=True,
-)
-
-# ---------------------------------------------------------------------------
-# Reusable components
-# ---------------------------------------------------------------------------
-
-def kpi_card(title: str, value: str, subtitle: str = "", color: str = "primary"):
-    return dbc.Card(
-        dbc.CardBody([
-            html.H6(title, className="card-subtitle mb-1 text-muted",
-                     style={"fontSize": "0.85rem"}),
-            html.H3(value, className=f"card-title text-{color} mb-0",
-                     style={"fontWeight": "700"}),
-            html.Small(subtitle, className="text-muted") if subtitle else None,
-        ]),
-        className="shadow-sm h-100",
-    )
-
-
-def section_header(title: str, subtitle: str = ""):
-    return html.Div([
-        html.H4(title, className="mb-0", style={"fontWeight": "600"}),
-        html.P(subtitle, className="text-muted mb-3") if subtitle else None,
-    ], className="mt-4 mb-3")
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    k = queries.kpis()
+    f = queries.filter_options()
+    return TEMPLATE.render(kpis=k, filters=f)
 
 
 # ---------------------------------------------------------------------------
-# Layout
+# API endpoints — each returns Plotly JSON or raw data
 # ---------------------------------------------------------------------------
 
-def build_filters(df: pd.DataFrame):
-    districts = sorted(df["supervisor_district"].dropna().unique().tolist())
-    years = sorted(df["filed_year"].dropna().unique().tolist())
-    min_year, max_year = int(years[0]) if years else 2000, int(years[-1]) if years else 2026
-
-    return dbc.Card(dbc.CardBody([
-        html.H5("Filters", className="mb-3"),
-        dbc.Label("Supervisor District"),
-        dcc.Dropdown(
-            id="filter-district",
-            options=[{"label": f"District {d}", "value": d} for d in districts],
-            multi=True,
-            placeholder="All districts",
-        ),
-        dbc.Label("Year Range", className="mt-3"),
-        dcc.RangeSlider(
-            id="filter-year-range",
-            min=min_year,
-            max=max_year,
-            value=[max(min_year, 2015), max_year],
-            marks={y: str(y) for y in range(min_year, max_year + 1, 5)},
-            step=1,
-            tooltip={"placement": "bottom", "always_visible": True},
-        ),
-        dbc.Label("Housing Permits Only", className="mt-3"),
-        dbc.Switch(id="filter-housing-only", value=True, label="Yes"),
-    ]), className="shadow-sm")
+def _parse_filters(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+) -> dict:
+    districts = [district] if district else None
+    return dict(districts=districts, year_min=year_min, year_max=year_max, housing_only=bool(housing_only))
 
 
-def build_layout(df: pd.DataFrame):
-    housing = df[df["is_housing"] == True]
-    stuck = stuck_permits(df)
-    scorecard = district_scorecard(df)
-
-    # KPIs
-    total_permits = len(housing)
-    median_days = housing["days_filed_to_issued"].median()
-    total_stuck = len(stuck)
-    stuck_units = stuck["proposed_units"].sum() if "proposed_units" in stuck.columns else 0
-
-    return dbc.Container([
-        # Header
-        dbc.Row(dbc.Col(html.Div([
-            html.H2("SF Permitting Bottleneck Analyzer",
-                     className="mb-0", style={"fontWeight": "700"}),
-            html.P(
-                "Making San Francisco's housing permitting pipeline transparent. "
-                "Data from SF Open Data (DBI Building Permits).",
-                className="text-muted mb-0",
-            ),
-        ]), className="py-3 border-bottom mb-3")),
-
-        # Filters + KPIs row
-        dbc.Row([
-            dbc.Col(build_filters(df), width=3),
-            dbc.Col([
-                dbc.Row([
-                    dbc.Col(kpi_card(
-                        "Housing Permits",
-                        f"{total_permits:,}",
-                        "Total in dataset",
-                    ), md=3),
-                    dbc.Col(kpi_card(
-                        "Median Days to Issue",
-                        f"{median_days:,.0f}" if pd.notna(median_days) else "N/A",
-                        "Filed to permit issued",
-                        color="warning" if pd.notna(median_days) and median_days > 180 else "success",
-                    ), md=3),
-                    dbc.Col(kpi_card(
-                        "Stuck Permits",
-                        f"{total_stuck:,}",
-                        f"Filed >1yr, not issued",
-                        color="danger",
-                    ), md=3),
-                    dbc.Col(kpi_card(
-                        "Units Stuck",
-                        f"{stuck_units:,.0f}",
-                        "Housing units blocked",
-                        color="danger",
-                    ), md=3),
-                ], className="mb-3"),
-
-                # Tabs for main content
-                dbc.Tabs([
-                    dbc.Tab(label="Bottlenecks", tab_id="tab-bottlenecks"),
-                    dbc.Tab(label="Trends", tab_id="tab-trends"),
-                    dbc.Tab(label="District Scorecard", tab_id="tab-districts"),
-                    dbc.Tab(label="Stuck Permits", tab_id="tab-stuck"),
-                ], id="main-tabs", active_tab="tab-bottlenecks"),
-                html.Div(id="tab-content", className="mt-3"),
-            ], width=9),
-        ]),
-    ], fluid=True, className="px-4")
+@app.get("/api/kpis")
+async def api_kpis(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    return queries.kpis(**f)
 
 
-# ---------------------------------------------------------------------------
-# Callbacks
-# ---------------------------------------------------------------------------
-
-def apply_filters(df, districts, year_range, housing_only):
-    """Apply user-selected filters to the DataFrame."""
-    filtered = df.copy()
-    if districts:
-        filtered = filtered[filtered["supervisor_district"].isin(districts)]
-    if year_range:
-        filtered = filtered[
-            (filtered["filed_year"] >= year_range[0]) &
-            (filtered["filed_year"] <= year_range[1])
-        ]
-    if housing_only:
-        filtered = filtered[filtered["is_housing"] == True]
-    return filtered
-
-
-def register_callbacks(df: pd.DataFrame):
-
-    @callback(
-        Output("tab-content", "children"),
-        Input("main-tabs", "active_tab"),
-        Input("filter-district", "value"),
-        Input("filter-year-range", "value"),
-        Input("filter-housing-only", "value"),
-    )
-    def render_tab(tab, districts, year_range, housing_only):
-        filtered = apply_filters(df, districts, year_range, housing_only)
-
-        if len(filtered) == 0:
-            return dbc.Alert("No permits match the current filters.", color="warning")
-
-        if tab == "tab-bottlenecks":
-            return render_bottlenecks(filtered)
-        elif tab == "tab-trends":
-            return render_trends(filtered)
-        elif tab == "tab-districts":
-            return render_districts(filtered)
-        elif tab == "tab-stuck":
-            return render_stuck(filtered)
-        return html.Div()
+@app.get("/api/stages")
+async def api_stages(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    df = queries.stage_durations(**f)
+    fig = px.bar(df, x="stage", y="median_days", color="stage",
+                 title="Median Processing Time by Stage (days)",
+                 text="median_days",
+                 color_discrete_sequence=px.colors.qualitative.Set2)
+    fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+    fig.update_layout(showlegend=False, height=350)
+    return _to_json(fig)
 
 
-def render_bottlenecks(df):
-    """Bottleneck analysis tab."""
-    # Stage duration box plots
-    duration_cols = [
-        ("days_filed_to_approved", "Filed to Approved"),
-        ("days_approved_to_issued", "Approved to Issued"),
-        ("days_filed_to_issued", "Filed to Issued"),
-        ("days_issued_to_completed", "Issued to Completed"),
-    ]
-    box_data = []
-    for col, label in duration_cols:
-        if col in df.columns:
-            vals = df[col].dropna()
-            # Cap at 99th percentile for visualization
-            cap = vals.quantile(0.99) if len(vals) > 0 else 1000
-            vals = vals[vals <= cap]
-            for v in vals:
-                box_data.append({"Stage": label, "Days": v})
-
-    box_df = pd.DataFrame(box_data)
-    fig_box = px.box(
-        box_df, x="Stage", y="Days",
-        title="Permit Processing Time by Stage",
-        color="Stage",
-        color_discrete_sequence=px.colors.qualitative.Set2,
-    )
-    fig_box.update_layout(showlegend=False, height=400)
-
-    # By-district bar chart — stage_duration_summary returns "stage", group_col, "median", etc.
-    # Filter to the filed-to-issued stage for the district chart
-    summary = stage_duration_summary(df, group_by="supervisor_district")
-    district_summary = summary[summary["stage"] == "days_filed_to_issued"] if not summary.empty else pd.DataFrame()
-    if not district_summary.empty and "median" in district_summary.columns:
-        district_sorted = district_summary.sort_values("median", ascending=False)
-        fig_district = px.bar(
-            district_sorted,
-            x="supervisor_district",
-            y="median",
-            title="Median Days: Filed to Issued (by Supervisor District)",
-            labels={"supervisor_district": "District", "median": "Median Days"},
-            color="median",
-            color_continuous_scale="RdYlGn_r",
-        )
-        fig_district.update_layout(height=400)
-    else:
-        fig_district = go.Figure()
-        fig_district.add_annotation(text="Insufficient data", showarrow=False)
-
-    # By permit type
-    summary_type = stage_duration_summary(df, group_by="permit_type_definition")
-    type_summary = summary_type[summary_type["stage"] == "days_filed_to_issued"] if not summary_type.empty else pd.DataFrame()
-    if not type_summary.empty and "median" in type_summary.columns:
-        top_types = type_summary.nlargest(15, "median")
-        fig_type = px.bar(
-            top_types,
-            y="permit_type_definition",
-            x="median",
-            orientation="h",
-            title="Slowest Permit Types (Median Days to Issuance)",
-            labels={"permit_type_definition": "Permit Type", "median": "Median Days"},
-            color="median",
-            color_continuous_scale="RdYlGn_r",
-        )
-        fig_type.update_layout(height=500, yaxis={"categoryorder": "total ascending"})
-    else:
-        fig_type = go.Figure()
-
-    return html.Div([
-        section_header("Where Do Permits Get Stuck?",
-                       "Distribution of processing times across pipeline stages"),
-        dcc.Graph(figure=fig_box),
-        dbc.Row([
-            dbc.Col(dcc.Graph(figure=fig_district), md=6),
-            dbc.Col(dcc.Graph(figure=fig_type), md=6),
-        ]),
-    ])
+@app.get("/api/by_district")
+async def api_by_district(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    df = queries.by_district(**f)
+    fig = px.bar(df, x="district", y="median_days",
+                 title="Median Days: Filed to Issued (by District)",
+                 color="median_days", color_continuous_scale="RdYlGn_r")
+    fig.update_layout(height=400)
+    return _to_json(fig)
 
 
-def render_trends(df):
-    """Trend analysis tab."""
-    # Quarterly trend line
-    qt = quarterly_trends(df)
-    if not qt.empty:
-        fig_quarterly = go.Figure()
-        metric_col = [c for c in qt.columns if c.startswith("median_")][0] if any(c.startswith("median_") for c in qt.columns) else None
-        rolling_col = [c for c in qt.columns if "rolling" in c.lower()][0] if any("rolling" in c.lower() for c in qt.columns) else None
+@app.get("/api/by_permit_type")
+async def api_by_permit_type(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    df = queries.by_permit_type(**f)
+    fig = px.bar(df, y="permit_type", x="median_days", orientation="h",
+                 title="Slowest Permit Types (Median Days)",
+                 color="median_days", color_continuous_scale="RdYlGn_r")
+    fig.update_layout(height=400, yaxis={"categoryorder": "total ascending"})
+    return _to_json(fig)
 
-        if metric_col:
-            fig_quarterly.add_trace(go.Scatter(
-                x=qt["period"], y=qt[metric_col],
-                mode="lines+markers", name="Quarterly Median",
-                line=dict(color="#3498db", width=1),
-                marker=dict(size=4),
-                opacity=0.6,
-            ))
-        if rolling_col:
-            fig_quarterly.add_trace(go.Scatter(
-                x=qt["period"], y=qt[rolling_col],
-                mode="lines", name="4-Quarter Rolling Avg",
-                line=dict(color="#e74c3c", width=3),
-            ))
 
-        # Add policy milestone annotations
+@app.get("/api/quarterly")
+async def api_quarterly(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    df = queries.quarterly_trends(**f)
+    fig = go.Figure()
+    if not df.empty:
+        fig.add_trace(go.Scatter(x=df["period"], y=df["median_days"],
+                                  mode="lines+markers", name="Quarterly Median",
+                                  line=dict(color="#3498db", width=1), marker=dict(size=3), opacity=0.6))
+        fig.add_trace(go.Scatter(x=df["period"], y=df["rolling_avg"],
+                                  mode="lines", name="4-Qtr Rolling Avg",
+                                  line=dict(color="#e74c3c", width=3)))
         for date_str, event in POLICY_MILESTONES.items():
-            date = pd.Timestamp(date_str)
-            # Find closest period
-            qt_dates = pd.to_datetime(qt["period"].str.replace(r"(\d{4})-Q(\d)",
-                lambda m: f"{m.group(1)}-{int(m.group(2))*3:02d}-01", regex=True), errors="coerce")
-            if len(qt_dates.dropna()) > 0:
-                fig_quarterly.add_vline(
-                    x=date_str[:4] + "-Q" + str((int(date_str[5:7]) - 1) // 3 + 1),
-                    line_dash="dash", line_color="gray", opacity=0.5,
-                    annotation_text=event[:30],
-                    annotation_position="top",
-                    annotation_font_size=9,
-                )
-
-        fig_quarterly.update_layout(
-            title="Median Days: Filed to Issued (Quarterly Trend)",
-            xaxis_title="Quarter", yaxis_title="Median Days",
-            height=450, hovermode="x unified",
-        )
-    else:
-        fig_quarterly = go.Figure()
-        fig_quarterly.add_annotation(text="Insufficient data", showarrow=False)
-
-    # Annual volume chart
-    vol = volume_analysis(df, group_by="filed_year")
-    if not vol.empty:
-        fig_volume = go.Figure()
-        if "permits_filed" in vol.columns:
-            fig_volume.add_trace(go.Bar(x=vol["filed_year"], y=vol["permits_filed"], name="Filed"))
-        if "permits_issued" in vol.columns:
-            fig_volume.add_trace(go.Bar(x=vol["filed_year"], y=vol["permits_issued"], name="Issued"))
-        if "permits_completed" in vol.columns:
-            fig_volume.add_trace(go.Bar(x=vol["filed_year"], y=vol["permits_completed"], name="Completed"))
-        fig_volume.update_layout(
-            title="Housing Permit Volume by Year",
-            barmode="group", height=400,
-            xaxis_title="Year", yaxis_title="Number of Permits",
-        )
-    else:
-        fig_volume = go.Figure()
-
-    # Policy impact table
-    impact = policy_impact_analysis(df)
-    if impact:
-        impact_df = pd.DataFrame(impact)
-        impact_table = dbc.Table.from_dataframe(
-            impact_df.round(1),
-            striped=True, bordered=True, hover=True, size="sm",
-        )
-    else:
-        impact_table = dbc.Alert("Not enough data for policy impact analysis.", color="info")
-
-    return html.Div([
-        section_header("How Have Processing Times Changed?",
-                       "Quarterly and annual trends with key policy milestones"),
-        dcc.Graph(figure=fig_quarterly),
-        dcc.Graph(figure=fig_volume),
-        section_header("Policy Impact Analysis",
-                       "Did key policy changes actually speed things up?"),
-        impact_table,
-    ])
+            q = str((int(date_str[5:7]) - 1) // 3 + 1)
+            period = date_str[:4] + "-Q" + q
+            if period in df["period"].values:
+                fig.add_annotation(x=period, y=1, yref="paper",
+                                    text=event[:25], showarrow=True, arrowhead=2,
+                                    font=dict(size=8, color="gray"), arrowcolor="gray")
+    fig.update_layout(title="Median Days: Filed to Issued (Quarterly)", height=450, hovermode="x unified")
+    return _to_json(fig)
 
 
-def render_districts(df):
-    """District scorecard tab."""
-    scorecard = district_scorecard(df)
-    if scorecard.empty:
-        return dbc.Alert("No district data available.", color="warning")
+@app.get("/api/annual_volume")
+async def api_annual_volume(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    df = queries.annual_volume(**f)
+    fig = go.Figure()
+    if not df.empty:
+        fig.add_trace(go.Bar(x=df["year"], y=df["filed"], name="Filed"))
+        fig.add_trace(go.Bar(x=df["year"], y=df["issued"], name="Issued"))
+        fig.add_trace(go.Bar(x=df["year"], y=df["completed"], name="Completed"))
+    fig.update_layout(title="Permit Volume by Year", barmode="group", height=400)
+    return _to_json(fig)
 
-    # Scorecard table
-    display_cols = [c for c in scorecard.columns if c != "bottleneck_score"]
-    table = dbc.Table.from_dataframe(
-        scorecard[display_cols].round(1),
-        striped=True, bordered=True, hover=True, size="sm",
-        className="mt-2",
+
+@app.get("/api/policy_impact")
+async def api_policy_impact():
+    return queries.policy_impact()
+
+
+@app.get("/api/stuck_by_district")
+async def api_stuck_by_district(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+):
+    df = queries.stuck_by_district(
+        districts=[district] if district else None,
+        year_min=year_min, year_max=year_max,
     )
-
-    # Choropleth-style bar chart
-    if "median_days_to_issuance" in scorecard.columns:
-        fig = px.bar(
-            scorecard.sort_values("median_days_to_issuance", ascending=True),
-            y="supervisor_district",
-            x="median_days_to_issuance",
-            orientation="h",
-            title="District Rankings: Median Days to Permit Issuance",
-            color="median_days_to_issuance",
-            color_continuous_scale="RdYlGn_r",
-            labels={"supervisor_district": "District", "median_days_to_issuance": "Median Days"},
-        )
-        fig.update_layout(height=450)
-    else:
-        fig = go.Figure()
-
-    # Units stuck per district
-    stuck = stuck_permits(df)
-    if not stuck.empty and "supervisor_district" in stuck.columns:
-        stuck_by_dist = stuck.groupby("supervisor_district").agg(
-            permits_stuck=("permit_number", "count"),
-            units_stuck=("proposed_units", "sum"),
-        ).reset_index().sort_values("units_stuck", ascending=False)
-
-        fig_stuck = px.bar(
-            stuck_by_dist,
-            x="supervisor_district",
-            y="units_stuck",
-            title="Housing Units Stuck in Pipeline (by District)",
-            labels={"supervisor_district": "District", "units_stuck": "Units Stuck"},
-            color="units_stuck",
-            color_continuous_scale="Reds",
-            text="permits_stuck",
-        )
-        fig_stuck.update_traces(texttemplate="%{text} permits", textposition="outside")
-        fig_stuck.update_layout(height=400)
-    else:
-        fig_stuck = go.Figure()
-
-    return html.Div([
-        section_header("District Scorecard",
-                       "How does each Supervisor District compare?"),
-        dcc.Graph(figure=fig),
-        dcc.Graph(figure=fig_stuck),
-        section_header("Detailed Scorecard"),
-        table,
-    ])
+    fig = px.bar(df, x="district", y="stuck_units",
+                 title="Housing Units Stuck in Pipeline (by District)",
+                 color="stuck_units", color_continuous_scale="Reds",
+                 text="stuck_permits")
+    fig.update_traces(texttemplate="%{text} permits", textposition="outside")
+    fig.update_layout(height=400)
+    return _to_json(fig)
 
 
-def render_stuck(df):
-    """Stuck permits tab — the money shot for policymakers."""
-    stuck = stuck_permits(df)
-    if stuck.empty:
-        return dbc.Alert("No stuck permits found with current filters.", color="success")
+@app.get("/api/district_table")
+async def api_district_table(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    housing_only: int = Query(1),
+):
+    f = _parse_filters(district, year_min, year_max, housing_only)
+    df = queries.by_district(**f)
+    return df.to_dict(orient="records")
 
-    total_stuck = len(stuck)
-    total_units = stuck["proposed_units"].sum() if "proposed_units" in stuck.columns else 0
-    avg_wait = stuck["days_waiting"].mean() if "days_waiting" in stuck.columns else 0
 
-    # Summary cards
-    cards = dbc.Row([
-        dbc.Col(kpi_card("Stuck Permits", f"{total_stuck:,}", ">1 year without issuance", "danger"), md=4),
-        dbc.Col(kpi_card("Units Blocked", f"{total_units:,.0f}", "Housing units that can't break ground", "danger"), md=4),
-        dbc.Col(kpi_card("Avg Wait", f"{avg_wait:,.0f} days", f"({avg_wait/365:.1f} years)", "warning"), md=4),
-    ], className="mb-3")
-
-    # Top 50 worst stuck permits table
-    display_cols = ["permit_number", "filed_date", "status", "days_waiting",
-                    "supervisor_district", "proposed_units", "description"]
-    available_cols = [c for c in display_cols if c in stuck.columns]
-    top_stuck = stuck.head(50)[available_cols].copy()
-    if "filed_date" in top_stuck.columns:
-        top_stuck["filed_date"] = pd.to_datetime(top_stuck["filed_date"]).dt.strftime("%Y-%m-%d")
-    if "days_waiting" in top_stuck.columns:
-        top_stuck["years_waiting"] = (top_stuck["days_waiting"] / 365).round(1)
-    if "description" in top_stuck.columns:
-        top_stuck["description"] = top_stuck["description"].str[:100]
-
-    table = dbc.Table.from_dataframe(
-        top_stuck, striped=True, bordered=True, hover=True, size="sm",
+@app.get("/api/stuck_list")
+async def api_stuck_list(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+):
+    df = queries.stuck_permits_list(
+        districts=[district] if district else None,
+        year_min=year_min, year_max=year_max,
     )
-
-    # Histogram of wait times
-    fig_hist = px.histogram(
-        stuck, x="days_waiting", nbins=50,
-        title="Distribution of Wait Times for Stuck Permits",
-        labels={"days_waiting": "Days Waiting"},
-        color_discrete_sequence=["#e74c3c"],
-    )
-    fig_hist.update_layout(height=350)
-
-    return html.Div([
-        section_header(
-            f"{total_stuck:,} Permits Stuck in the Pipeline",
-            f"These permits were filed over a year ago and still haven't been issued. "
-            f"They represent {total_units:,.0f} potential housing units.",
-        ),
-        cards,
-        dcc.Graph(figure=fig_hist),
-        section_header("Worst Offenders (Top 50 by Wait Time)"),
-        html.Div(table, style={"maxHeight": "500px", "overflowY": "auto"}),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def create_app():
-    """Create and configure the Dash app."""
-    df = load_data()
-    app.layout = build_layout(df)
-    register_callbacks(df)
-    logger.info("Dashboard app created and ready to serve")
-    return app
-
-
-if __name__ == "__main__":
-    application = create_app()
-    application.run(host=DASH_HOST, port=DASH_PORT, debug=DASH_DEBUG)
+    # Replace NaN/NaT with None for JSON serialization
+    return json.loads(df.to_json(orient="records", date_format="iso"))

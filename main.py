@@ -70,11 +70,16 @@ def cmd_report():
 
 
 def cmd_dashboard():
-    from src.dashboard.app import create_app
-    app = create_app()
-    logger.info("Starting dashboard at http://127.0.0.1:8050")
+    import uvicorn
+    from src.config import DASH_HOST, DASH_PORT, DASH_DEBUG
+    logger.info("Starting dashboard at http://%s:%d", DASH_HOST, DASH_PORT)
     logger.info("Press Ctrl+C to stop.")
-    app.run()
+    uvicorn.run(
+        "src.dashboard.app:app",
+        host=DASH_HOST,
+        port=DASH_PORT,
+        reload=DASH_DEBUG,
+    )
 
 
 def cmd_pipeline():
