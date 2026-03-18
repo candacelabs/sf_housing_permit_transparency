@@ -69,18 +69,19 @@ POLICY_MILESTONES = {
 }
 
 # Current SF Board of Supervisors (2025-2026 term)
+# Email format: supervisorname@sfgov.org (standard for all supervisors)
 SUPERVISORS = {
-    "1": "Connie Chan",
-    "2": "Stephen Sherrill",
-    "3": "Danny Sauter",
-    "4": "Alan Wong",
-    "5": "Bilal Mahmood",
-    "6": "Matt Dorsey",
-    "7": "Myrna Melgar",
-    "8": "Rafael Mandelman",
-    "9": "Jackie Fielder",
-    "10": "Shamann Walton",
-    "11": "Chyanne Chen",
+    "1":  {"name": "Connie Chan",        "email": "connie.chan@sfgov.org"},
+    "2":  {"name": "Stephen Sherrill",    "email": "stephen.sherrill@sfgov.org"},
+    "3":  {"name": "Danny Sauter",        "email": "danny.sauter@sfgov.org"},
+    "4":  {"name": "Alan Wong",           "email": "alan.wong@sfgov.org"},
+    "5":  {"name": "Bilal Mahmood",       "email": "bilal.mahmood@sfgov.org"},
+    "6":  {"name": "Matt Dorsey",         "email": "matt.dorsey@sfgov.org"},
+    "7":  {"name": "Myrna Melgar",        "email": "myrna.melgar@sfgov.org"},
+    "8":  {"name": "Rafael Mandelman",    "email": "rafael.mandelman@sfgov.org"},
+    "9":  {"name": "Jackie Fielder",      "email": "jackie.fielder@sfgov.org"},
+    "10": {"name": "Shamann Walton",      "email": "shamann.walton@sfgov.org"},
+    "11": {"name": "Chyanne Chen",        "email": "chyanne.chen@sfgov.org"},
 }
 
 # Counterfactual impact multipliers (sources in README)

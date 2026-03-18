@@ -159,7 +159,7 @@ tailwind.config = {
 
 <footer class="max-w-7xl mx-auto px-6 py-6 text-center text-xs text-gray-400">
   Data: <a href="https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9" class="underline hover:text-gray-600">SF Open Data &mdash; DBI Building Permits</a>
-  &middot; Built for policymakers by <a href="https://github.com/candacelabs/sf_housing_permit_transparency" class="underline hover:text-gray-600">candacelabs</a>
+  &middot; Built for citizens by <a href="https://github.com/candacelabs/sf_housing_permit_transparency" class="underline hover:text-gray-600">candacelabs</a>
 </footer>
 
 <script>
@@ -310,33 +310,80 @@ async function loadTab(tab) {
       fetch('/api/supervisor_scorecard?' + q).then(r => r.json()),
       fetch('/api/nimby_signals?' + q).then(r => r.json()),
     ]);
+    const money = n => '$' + (n >= 1e9 ? (n/1e9).toFixed(1) + 'B' : n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : comma(Math.round(n)));
+    // Build reason string for each supervisor
+    function reason(r) {
+      const parts = [];
+      if (r.stuck_units > 0) parts.push(comma(Math.round(r.stuck_units)) + ' housing units stuck in their district');
+      if (r.people_without_homes > 0) parts.push(comma(Math.round(r.people_without_homes)) + ' people without homes as a result');
+      if (r.property_tax_lost > 0) parts.push(money(r.property_tax_lost) + ' in lost city tax revenue');
+      if (r.median_days > 100) parts.push('median ' + r.median_days + ' days to issue permits (too slow)');
+      return parts.join('. ') + '.';
+    }
+    function emailUrl(r) {
+      const subject = encodeURIComponent('Housing permits stuck in District ' + r.d + ' — ' + comma(Math.round(r.stuck_units)) + ' units blocked');
+      const body = encodeURIComponent(
+        'Dear Supervisor ' + r.supervisor + ',\n\n'
+        + 'I am writing as a concerned San Francisco resident about the housing permitting delays in District ' + r.d + '.\n\n'
+        + 'According to public DBI permit data:\n'
+        + '- ' + comma(r.stuck_permits) + ' housing permits in your district have been filed for over a year and still have not been issued.\n'
+        + '- These represent ' + comma(Math.round(r.stuck_units)) + ' housing units that cannot break ground.\n'
+        + '- An estimated ' + comma(Math.round(r.people_without_homes)) + ' people are without homes as a result.\n'
+        + '- The city has foregone approximately ' + money(r.property_tax_lost) + ' in property tax revenue.\n\n'
+        + 'I urge you to:\n'
+        + '1. Publicly account for why these permits are delayed.\n'
+        + '2. Support Mayor Lurie\'s plan to consolidate DBI, Planning, and PermitSF.\n'
+        + '3. Push for expedited processing of housing permits in District ' + r.d + '.\n\n'
+        + 'San Francisco\'s housing crisis demands action, not bureaucratic delay.\n\n'
+        + 'Data source: https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9\n'
+        + 'Dashboard: https://github.com/candacelabs/sf_housing_permit_transparency\n\n'
+        + 'Sincerely,\n[Your name]\n[Your address in District ' + r.d + ']'
+      );
+      return 'mailto:' + r.email + '?cc=Board.of.Supervisors@sfgov.org&subject=' + subject + '&body=' + body;
+    }
+    // Top accountability cards
+    let topCards = '';
+    scorecard.slice(0, 11).forEach((r, i) => {
+      const urgency = r.stuck_units > 1000 ? 'border-red-300 bg-red-50' : r.stuck_units > 100 ? 'border-amber-200 bg-amber-50' : 'border-gray-200 bg-white';
+      const rank = i + 1;
+      topCards += '<div class="' + urgency + ' border rounded-xl p-5 mb-3">'
+        + '<div class="flex items-start justify-between">'
+        + '<div class="flex items-start gap-3">'
+        + '<div class="flex-shrink-0 w-8 h-8 rounded-full bg-gray-800 text-white flex items-center justify-center text-sm font-bold">' + rank + '</div>'
+        + '<div>'
+        + '<h4 class="font-semibold text-gray-900">Supervisor ' + r.supervisor + ' <span class="text-gray-400 font-normal">— District ' + r.d + '</span></h4>'
+        + '<p class="text-sm text-gray-600 mt-1">' + reason(r) + '</p>'
+        + '<div class="flex gap-4 mt-2 text-xs">'
+        + '<span class="text-red-600 font-semibold">' + comma(Math.round(r.stuck_units)) + ' units stuck</span>'
+        + '<span class="text-red-700">' + comma(Math.round(r.people_without_homes)) + ' people affected</span>'
+        + '<span class="text-blue-600">' + money(r.property_tax_lost) + ' tax lost</span>'
+        + '</div></div></div>'
+        + (r.email ? '<a href="' + emailUrl(r) + '" class="flex-shrink-0 inline-flex items-center gap-1.5 bg-navy-500 hover:bg-navy-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors">'
+        + '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>'
+        + 'Email Supervisor</a>' : '')
+        + '</div></div>';
+    });
     el.innerHTML = `
-      <h3 class="text-lg font-semibold text-gray-800">Supervisor Accountability Scorecard</h3>
-      <p class="text-sm text-gray-500 mb-1">Which districts are blocking housing — and who is responsible?</p>
-      <p class="text-xs text-gray-400 mb-4">Showing current (2025-2026) supervisors. Property tax figures are cumulative estimates.</p>
-      <div id="accountability-chart"></div>
-      <div id="accountability-table" class="mt-6"></div>
+      <div class="flex items-start gap-3 mb-6">
+        <div class="flex-shrink-0 w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
+          <svg class="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+        </div>
+        <div>
+          <h3 class="text-lg font-semibold text-gray-800">Who Is Responsible?</h3>
+          <p class="text-sm text-gray-500">Ranked by housing units stuck in their district. Click "Email Supervisor" to send a prefilled message demanding action.</p>
+          <p class="text-xs text-gray-400 mt-0.5">Showing current (2025-2026) Board of Supervisors. CC: Board.of.Supervisors@sfgov.org</p>
+        </div>
+      </div>
+      <div id="accountability-cards">${topCards}</div>
+      <div id="accountability-chart" class="mt-8"></div>
       <h3 class="text-lg font-semibold text-gray-800 mt-8">Obstruction Signals</h3>
-      <p class="text-sm text-gray-500 mb-2">Disapproval rates, withdrawal rates, and excess approval delays suggest where political resistance is strongest</p>
+      <p class="text-sm text-gray-500 mb-2">Disapproval rates, withdrawal rates, and excess approval delays — indicators of where political resistance is strongest</p>
       <div id="nimby-table"></div>`;
     const districts = scorecard.map(r => 'D' + r.d + ': ' + r.supervisor);
     Plotly.newPlot('accountability-chart', [
       {x: districts, y: scorecard.map(r => r.stuck_units), name: 'Stuck Units', type: 'bar', marker: {color: '#ef4444'}},
       {x: districts, y: scorecard.map(r => Math.round(r.people_without_homes)), name: 'People Affected', type: 'bar', marker: {color: '#991b1b'}},
-    ], {title: 'Housing Impact by Supervisor District', barmode: 'group', height: 450, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive: true});
-    const money = n => '$' + (n >= 1e9 ? (n/1e9).toFixed(1) + 'B' : n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : comma(Math.round(n)));
-    const sRows = scorecard.map(r => [
-      '<span class="font-semibold">D' + r.d + ': ' + r.supervisor + '</span>',
-      comma(r.total_permits),
-      r.median_days ?? '-',
-      comma(r.stuck_permits),
-      comma(Math.round(r.stuck_units)),
-      comma(Math.round(r.people_without_homes)),
-      money(r.property_tax_lost),
-    ]);
-    document.getElementById('accountability-table').innerHTML = makeTable(
-      ['District / Supervisor','Permits','Median Days','Stuck','Stuck Units','People Affected','Tax Revenue Lost'], sRows
-    );
+    ], {title: 'Housing Impact by Supervisor District', barmode: 'group', height: 400, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive: true});
     const nRows = nimby.map(r => [
       r.district,
       r.disapproval_rate_pct + '%',

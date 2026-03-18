@@ -457,7 +457,9 @@ def counterfactual_by_district(
     records = df.to_dict(orient="records")
     for r in records:
         r["district"] = f"District {r['d']}"
-        r["supervisor"] = SUPERVISORS.get(str(r["d"]), "Unknown")
+        info = SUPERVISORS.get(str(r["d"]), {})
+        r["supervisor"] = info.get("name", "Unknown") if isinstance(info, dict) else info
+        r["email"] = info.get("email", "") if isinstance(info, dict) else ""
     return records
 
 
@@ -550,7 +552,9 @@ def supervisor_scorecard(
     """).fetchdf()
     records = df.to_dict(orient="records")
     for r in records:
-        r["supervisor"] = SUPERVISORS.get(str(r["d"]), "Unknown")
+        info = SUPERVISORS.get(str(r["d"]), {})
+        r["supervisor"] = info.get("name", "Unknown") if isinstance(info, dict) else info
+        r["email"] = info.get("email", "") if isinstance(info, dict) else ""
     return records
 
 
