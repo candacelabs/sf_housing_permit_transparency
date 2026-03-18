@@ -5,6 +5,7 @@ The server starts instantly; computation happens per-request.
 """
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import plotly
@@ -14,12 +15,34 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment
 
-from src.config import POLICY_MILESTONES
+from src.config import POLICY_MILESTONES, PROCESSED_DIR
 from src.analysis import queries
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="SF Permitting Bottleneck Analyzer")
+_PARQUET = PROCESSED_DIR / "building_permits.parquet"
+
+
+def _ensure_data():
+    """Download and clean data if the processed parquet doesn't exist."""
+    if _PARQUET.exists():
+        return
+    logger.info("Processed data not found at %s — downloading and cleaning...", _PARQUET)
+    from src.ingestion.fetch import fetch_all
+    from src.ingestion.clean import get_clean_data
+
+    raw = fetch_all()
+    get_clean_data(raw)
+    logger.info("Data pipeline complete. Ready to serve.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _ensure_data()
+    yield
+
+
+app = FastAPI(title="SF Permitting Bottleneck Analyzer", lifespan=lifespan)
 
 _jinja_env = Environment()
 _jinja_env.filters["comma"] = lambda v: f"{int(v):,}" if v is not None and v == v else str(v)
