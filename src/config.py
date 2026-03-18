@@ -68,6 +68,30 @@ POLICY_MILESTONES = {
     "2026-01-01": "Lurie announces permitting consolidation",
 }
 
+# Current SF Board of Supervisors (2025-2026 term)
+SUPERVISORS = {
+    "1": "Connie Chan",
+    "2": "Stephen Sherrill",
+    "3": "Danny Sauter",
+    "4": "Alan Wong",
+    "5": "Bilal Mahmood",
+    "6": "Matt Dorsey",
+    "7": "Myrna Melgar",
+    "8": "Rafael Mandelman",
+    "9": "Jackie Fielder",
+    "10": "Shamann Walton",
+    "11": "Chyanne Chen",
+}
+
+# Counterfactual impact multipliers (sources in README)
+COUNTERFACTUAL = {
+    "household_size": 2.24,           # US Census ACS 2024, SF avg
+    "median_rent_1br_monthly": 3400,  # Zumper/Zillow midpoint, March 2026
+    "property_tax_rate": 0.0118,      # SF Treasurer FY 2025-26
+    "jobs_per_unit": 1.25,            # NAHB, rental apartments
+    "avg_assessed_value_per_unit": 600_000,  # Rough estimate, new SF housing
+}
+
 # Dashboard settings
 DASH_HOST = os.environ.get("DASH_HOST", "0.0.0.0")
 DASH_PORT = 8050

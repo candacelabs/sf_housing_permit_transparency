@@ -23,6 +23,7 @@ app = FastAPI(title="SF Permitting Bottleneck Analyzer")
 
 _jinja_env = Environment()
 _jinja_env.filters["comma"] = lambda v: f"{int(v):,}" if v is not None and v == v else str(v)
+_jinja_env.filters["int"] = lambda v: int(v) if v is not None else 0
 
 TEMPLATE = _jinja_env.from_string("""<!DOCTYPE html>
 <html lang="en">
@@ -108,7 +109,7 @@ tailwind.config = {
   </div>
 
   <!-- KPIs -->
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
     <div class="kpi-card border-blue-500">
       <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">Housing Permits</p>
       <p class="text-3xl font-bold text-gray-900 mt-1" id="kpi-permits">{{ kpis.total_permits | comma }}</p>
@@ -129,6 +130,11 @@ tailwind.config = {
       <p class="text-3xl font-bold text-red-600 mt-1" id="kpi-units">{{ kpis.stuck_units | comma }}</p>
       <p class="text-xs text-gray-400 mt-1">Housing units that can't break ground</p>
     </div>
+    <div class="kpi-card border-red-700">
+      <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">People Without Homes</p>
+      <p class="text-3xl font-bold text-red-700 mt-1" id="kpi-people">{{ (kpis.stuck_units * 2.24) | int | comma }}</p>
+      <p class="text-xs text-gray-400 mt-1">Stuck units &times; 2.24 avg household</p>
+    </div>
   </div>
 
   <!-- Tabs -->
@@ -137,6 +143,8 @@ tailwind.config = {
     <button class="tab-btn" onclick="switchTab('trends', this)">Trends</button>
     <button class="tab-btn" onclick="switchTab('districts', this)">District Scorecard</button>
     <button class="tab-btn" onclick="switchTab('stuck', this)">Stuck Permits</button>
+    <button class="tab-btn" onclick="switchTab('accountability', this)">Accountability</button>
+    <button class="tab-btn" onclick="switchTab('whatif', this)">What If?</button>
   </div>
 
   <!-- Tab content -->
@@ -176,6 +184,7 @@ async function refresh() {
   document.getElementById('kpi-days').textContent = kpis.median_days_to_issue ?? 'N/A';
   document.getElementById('kpi-stuck').textContent = comma(kpis.stuck_count);
   document.getElementById('kpi-units').textContent = comma(kpis.stuck_units);
+  document.getElementById('kpi-people').textContent = comma(Math.round(kpis.stuck_units * 2.24));
   loadTab(currentTab);
 }
 
@@ -295,6 +304,107 @@ async function loadTab(tab) {
       ];
     });
     document.getElementById('stuck-table').innerHTML = makeTable(['Permit','Filed','Status','Days Waiting','District','Neighborhood','Units','Description'], rows);
+  }
+  else if (tab === 'accountability') {
+    const [scorecard, nimby] = await Promise.all([
+      fetch('/api/supervisor_scorecard?' + q).then(r => r.json()),
+      fetch('/api/nimby_signals?' + q).then(r => r.json()),
+    ]);
+    el.innerHTML = `
+      <h3 class="text-lg font-semibold text-gray-800">Supervisor Accountability Scorecard</h3>
+      <p class="text-sm text-gray-500 mb-1">Which districts are blocking housing — and who is responsible?</p>
+      <p class="text-xs text-gray-400 mb-4">Showing current (2025-2026) supervisors. Property tax figures are cumulative estimates.</p>
+      <div id="accountability-chart"></div>
+      <div id="accountability-table" class="mt-6"></div>
+      <h3 class="text-lg font-semibold text-gray-800 mt-8">Obstruction Signals</h3>
+      <p class="text-sm text-gray-500 mb-2">Disapproval rates, withdrawal rates, and excess approval delays suggest where political resistance is strongest</p>
+      <div id="nimby-table"></div>`;
+    const districts = scorecard.map(r => 'D' + r.d + ': ' + r.supervisor);
+    Plotly.newPlot('accountability-chart', [
+      {x: districts, y: scorecard.map(r => r.stuck_units), name: 'Stuck Units', type: 'bar', marker: {color: '#ef4444'}},
+      {x: districts, y: scorecard.map(r => Math.round(r.people_without_homes)), name: 'People Affected', type: 'bar', marker: {color: '#991b1b'}},
+    ], {title: 'Housing Impact by Supervisor District', barmode: 'group', height: 450, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive: true});
+    const money = n => '$' + (n >= 1e9 ? (n/1e9).toFixed(1) + 'B' : n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : comma(Math.round(n)));
+    const sRows = scorecard.map(r => [
+      '<span class="font-semibold">D' + r.d + ': ' + r.supervisor + '</span>',
+      comma(r.total_permits),
+      r.median_days ?? '-',
+      comma(r.stuck_permits),
+      comma(Math.round(r.stuck_units)),
+      comma(Math.round(r.people_without_homes)),
+      money(r.property_tax_lost),
+    ]);
+    document.getElementById('accountability-table').innerHTML = makeTable(
+      ['District / Supervisor','Permits','Median Days','Stuck','Stuck Units','People Affected','Tax Revenue Lost'], sRows
+    );
+    const nRows = nimby.map(r => [
+      r.district,
+      r.disapproval_rate_pct + '%',
+      r.withdrawal_rate_pct + '%',
+      r.discretionary_mentions,
+      r.median_days_to_approve ?? '-',
+      '<span class="' + (r.excess_approval_delay > 0 ? 'text-red-600 font-semibold' : 'text-green-600') + '">' + (r.excess_approval_delay > 0 ? '+' : '') + (r.excess_approval_delay ?? '-') + ' days</span>',
+    ]);
+    document.getElementById('nimby-table').innerHTML = makeTable(
+      ['District','Disapproval Rate','Withdrawal Rate','Discretionary Mentions','Median Approval Days','Excess Delay vs Avg'], nRows
+    );
+  }
+  else if (tab === 'whatif') {
+    const [cf, cfDist, narratives] = await Promise.all([
+      fetch('/api/counterfactual?' + q).then(r => r.json()),
+      fetch('/api/counterfactual_by_district?' + q).then(r => r.json()),
+      fetch('/api/narratives?' + q).then(r => r.json()),
+    ]);
+    const money = n => '$' + (n >= 1e9 ? (n/1e9).toFixed(1) + 'B' : n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : comma(Math.round(n)));
+    el.innerHTML = `
+      <h3 class="text-lg font-semibold text-gray-800">What If Every Stuck Permit Was Issued Tomorrow?</h3>
+      <p class="text-sm text-gray-500 mb-6">The real cost of permitting delays, estimated from ${comma(cf.stuck_permits)} stuck permits</p>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="bg-red-50 rounded-xl p-5 border border-red-200">
+          <p class="text-xs font-medium text-red-800 uppercase">People Without Homes</p>
+          <p class="text-3xl font-bold text-red-700">${comma(Math.round(cf.people_without_homes))}</p>
+          <p class="text-xs text-red-600 mt-1">${comma(cf.stuck_units)} units &times; 2.24 avg household</p>
+        </div>
+        <div class="bg-amber-50 rounded-xl p-5 border border-amber-200">
+          <p class="text-xs font-medium text-amber-800 uppercase">Rent Revenue Lost</p>
+          <p class="text-3xl font-bold text-amber-700">${money(cf.rent_revenue_lost)}</p>
+          <p class="text-xs text-amber-600 mt-1">Cumulative while permits waited</p>
+        </div>
+        <div class="bg-blue-50 rounded-xl p-5 border border-blue-200">
+          <p class="text-xs font-medium text-blue-800 uppercase">Property Tax Lost</p>
+          <p class="text-3xl font-bold text-blue-700">${money(cf.property_tax_lost)}</p>
+          <p class="text-xs text-blue-600 mt-1">City revenue foregone</p>
+        </div>
+        <div class="bg-purple-50 rounded-xl p-5 border border-purple-200">
+          <p class="text-xs font-medium text-purple-800 uppercase">Jobs Not Created</p>
+          <p class="text-3xl font-bold text-purple-700">${comma(Math.round(cf.jobs_not_created))}</p>
+          <p class="text-xs text-purple-600 mt-1">${comma(cf.stuck_units)} units &times; 1.25 jobs/unit</p>
+        </div>
+      </div>
+      <div id="cf-district-chart"></div>
+      <h3 class="text-lg font-semibold text-gray-800 mt-8">The Worst Stuck Permits</h3>
+      <p class="text-sm text-gray-500 mb-2">Individual permits causing the most harm, ranked by impact (units &times; wait time)</p>
+      <div id="narrative-cards"></div>`;
+    Plotly.newPlot('cf-district-chart', [
+      {x: cfDist.map(r => r.district), y: cfDist.map(r => r.property_tax_lost), name: 'Property Tax Lost', type: 'bar', marker:{color:'#3b82f6'}},
+      {x: cfDist.map(r => r.district), y: cfDist.map(r => r.rent_revenue_lost), name: 'Rent Revenue Lost', type: 'bar', marker:{color:'#f59e0b'}},
+    ], {title:'Economic Impact by District', barmode:'stack', height:400, paper_bgcolor:'transparent', plot_bgcolor:'transparent'}, {responsive:true});
+    let cards = '';
+    for (const n of narratives) {
+      const filed = n.filed_date ? new Date(n.filed_date).toISOString().slice(0,10) : '-';
+      cards += '<div class="border border-gray-200 rounded-lg p-4 mb-3 hover:border-gray-300 transition-colors">'
+        + '<div class="flex justify-between items-start">'
+        + '<div><span class="font-mono text-sm font-semibold">' + (n.permit_number??'') + '</span>'
+        + ' <span class="badge badge-red ml-2">' + (n.status??'') + ' for ' + (n.years_waiting??'?') + 'yr</span></div>'
+        + '<span class="text-sm text-gray-500">' + (n.district??'') + ' &middot; ' + (n.neighborhood??'') + '</span></div>'
+        + '<p class="text-sm text-gray-600 mt-2">' + (n.address??'') + ': ' + ((n.description??'').slice(0,200)) + '</p>'
+        + '<div class="flex gap-6 mt-2 text-xs">'
+        + '<span class="text-red-600 font-semibold">' + comma(n.units) + ' units &middot; ' + comma(Math.round(n.people_affected??0)) + ' people</span>'
+        + '<span class="text-amber-600">Rent lost: ' + money(n.rent_revenue_lost??0) + '</span>'
+        + '<span class="text-gray-400">Filed: ' + filed + '</span>'
+        + '</div></div>';
+    }
+    document.getElementById('narrative-cards').innerHTML = cards;
   }
 }
 
@@ -500,3 +610,65 @@ async def api_stuck_list(
     )
     # Replace NaN/NaT with None for JSON serialization
     return json.loads(df.to_json(orient="records", date_format="iso"))
+
+
+# ---------------------------------------------------------------------------
+# Accountability & Counterfactual endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/counterfactual")
+async def api_counterfactual(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+):
+    return queries.counterfactual_impact(
+        districts=[district] if district else None,
+        year_min=year_min, year_max=year_max,
+    )
+
+
+@app.get("/api/counterfactual_by_district")
+async def api_counterfactual_by_district(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+):
+    return queries.counterfactual_by_district(
+        districts=[district] if district else None,
+        year_min=year_min, year_max=year_max,
+    )
+
+
+@app.get("/api/nimby_signals")
+async def api_nimby_signals(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+):
+    return queries.nimby_signals(
+        districts=[district] if district else None,
+        year_min=year_min, year_max=year_max,
+    )
+
+
+@app.get("/api/supervisor_scorecard")
+async def api_supervisor_scorecard(
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+):
+    return queries.supervisor_scorecard(year_min=year_min, year_max=year_max)
+
+
+@app.get("/api/narratives")
+async def api_narratives(
+    district: str | None = Query(None),
+    year_min: int | None = Query(None),
+    year_max: int | None = Query(None),
+    limit: int = Query(10),
+):
+    return queries.worst_stuck_narratives(
+        districts=[district] if district else None,
+        year_min=year_min, year_max=year_max,
+        limit=limit,
+    )

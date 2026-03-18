@@ -3,13 +3,14 @@
 All heavy computation happens here via SQL on parquet files.
 Typical query time: 20-150ms on 1.3M rows.
 """
+import json
 import logging
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
-from src.config import PROCESSED_DIR, POLICY_MILESTONES
+from src.config import PROCESSED_DIR, POLICY_MILESTONES, SUPERVISORS, COUNTERFACTUAL
 
 logger = logging.getLogger(__name__)
 
@@ -356,3 +357,231 @@ def filter_options() -> dict:
         "min_year": int(years[0]) if years[0] else 1980,
         "max_year": int(years[1]) if years[1] else 2026,
     }
+
+
+# ---------------------------------------------------------------------------
+# Accountability & Counterfactual queries
+# ---------------------------------------------------------------------------
+
+_CF = COUNTERFACTUAL  # shorthand
+
+
+def _stuck_where(
+    districts: list[str] | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+) -> str:
+    """WHERE clause for stuck housing permits (>1yr, not issued)."""
+    clauses = [
+        "net_new_units > 0",
+        "status IN ('Filed', 'Approved', 'filed', 'approved')",
+        "issued_date IS NULL",
+        "filed_date < current_date - INTERVAL '1 year'",
+    ]
+    if districts:
+        quoted = ", ".join(f"'{d}'" for d in districts)
+        clauses.append(f"supervisor_district IN ({quoted})")
+    if year_min is not None:
+        clauses.append(f"filed_year >= {int(year_min)}")
+    if year_max is not None:
+        clauses.append(f"filed_year <= {int(year_max)}")
+    return "WHERE " + " AND ".join(clauses)
+
+
+def counterfactual_impact(
+    districts: list[str] | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+) -> dict:
+    """Citywide counterfactual: what stuck permits are costing SF."""
+    w = _stuck_where(districts, year_min, year_max)
+    con = _con()
+    row = con.sql(f"""
+        SELECT
+            count(*) as stuck_permits,
+            coalesce(sum(proposed_units), 0) as stuck_units,
+            coalesce(sum(proposed_units), 0) * {_CF['household_size']} as people_without_homes,
+            coalesce(sum(
+                proposed_units * {_CF['median_rent_1br_monthly']}
+                * (current_date - filed_date::date) / 30.0
+            ), 0) as rent_revenue_lost,
+            coalesce(sum(
+                proposed_units * {_CF['avg_assessed_value_per_unit']}
+                * {_CF['property_tax_rate']}
+                * (current_date - filed_date::date) / 365.0
+            ), 0) as property_tax_lost,
+            coalesce(sum(proposed_units), 0) * {_CF['jobs_per_unit']} as jobs_not_created,
+            avg(current_date - filed_date::date) as avg_days_waiting
+        FROM '{_PARQUET}' {w}
+    """).fetchone()
+    return {
+        "stuck_permits": row[0],
+        "stuck_units": int(row[1]),
+        "people_without_homes": round(row[2]),
+        "rent_revenue_lost": round(row[3]),
+        "property_tax_lost": round(row[4]),
+        "jobs_not_created": round(row[5]),
+        "avg_days_waiting": round(row[6]) if row[6] else 0,
+    }
+
+
+def counterfactual_by_district(
+    districts: list[str] | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+) -> list[dict]:
+    """Counterfactual impact broken down by supervisor district."""
+    w = _stuck_where(districts, year_min, year_max)
+    con = _con()
+    df = con.sql(f"""
+        SELECT
+            cast(supervisor_district as int) as d,
+            count(*) as stuck_permits,
+            coalesce(sum(proposed_units), 0) as stuck_units,
+            coalesce(sum(proposed_units), 0) * {_CF['household_size']} as people_without_homes,
+            coalesce(sum(
+                proposed_units * {_CF['median_rent_1br_monthly']}
+                * (current_date - filed_date::date) / 30.0
+            ), 0) as rent_revenue_lost,
+            coalesce(sum(
+                proposed_units * {_CF['avg_assessed_value_per_unit']}
+                * {_CF['property_tax_rate']}
+                * (current_date - filed_date::date) / 365.0
+            ), 0) as property_tax_lost,
+            coalesce(sum(proposed_units), 0) * {_CF['jobs_per_unit']} as jobs_not_created
+        FROM '{_PARQUET}' {w}
+            AND supervisor_district IS NOT NULL
+        GROUP BY supervisor_district
+        ORDER BY stuck_units DESC
+    """).fetchdf()
+    records = df.to_dict(orient="records")
+    for r in records:
+        r["district"] = f"District {r['d']}"
+        r["supervisor"] = SUPERVISORS.get(str(r["d"]), "Unknown")
+    return records
+
+
+def nimby_signals(
+    districts: list[str] | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+) -> list[dict]:
+    """Per-district obstruction signals: disapproval rates, excess delays."""
+    clauses = ["net_new_units > 0", "supervisor_district IS NOT NULL"]
+    if districts:
+        quoted = ", ".join(f"'{d}'" for d in districts)
+        clauses.append(f"supervisor_district IN ({quoted})")
+    if year_min is not None:
+        clauses.append(f"filed_year >= {int(year_min)}")
+    if year_max is not None:
+        clauses.append(f"filed_year <= {int(year_max)}")
+    w = "WHERE " + " AND ".join(clauses)
+
+    con = _con()
+    df = con.sql(f"""
+        WITH district_stats AS (
+            SELECT
+                cast(supervisor_district as int) as d,
+                count(*) as total_permits,
+                count(CASE WHEN status IN ('Disapproved', 'disapproved') THEN 1 END) as disapproved,
+                count(CASE WHEN status IN ('Withdrawn', 'withdrawn') THEN 1 END) as withdrawn,
+                count(CASE WHEN lower(description) LIKE '%discretionary review%'
+                             OR lower(description) LIKE '%conditional use%' THEN 1 END) as discretionary_mentions,
+                median(days_filed_to_issued) as median_days_to_issue,
+                median(days_filed_to_approved) as median_days_to_approve
+            FROM '{_PARQUET}' {w}
+            GROUP BY supervisor_district
+        )
+        SELECT
+            'District ' || d as district,
+            total_permits,
+            round(disapproved * 100.0 / total_permits, 2) as disapproval_rate_pct,
+            round(withdrawn * 100.0 / total_permits, 2) as withdrawal_rate_pct,
+            discretionary_mentions,
+            round(median_days_to_issue, 1) as median_days_to_issue,
+            round(median_days_to_approve, 1) as median_days_to_approve,
+            round(median_days_to_approve - (
+                SELECT median(median_days_to_approve) FROM district_stats
+            ), 1) as excess_approval_delay
+        FROM district_stats
+        ORDER BY excess_approval_delay DESC NULLS LAST
+    """).fetchdf()
+    return df.to_dict(orient="records")
+
+
+def supervisor_scorecard(
+    year_min: int | None = None,
+    year_max: int | None = None,
+) -> list[dict]:
+    """Combined district scorecard with supervisor names and impact."""
+    clauses = ["net_new_units > 0", "supervisor_district IS NOT NULL"]
+    if year_min is not None:
+        clauses.append(f"filed_year >= {int(year_min)}")
+    if year_max is not None:
+        clauses.append(f"filed_year <= {int(year_max)}")
+    w = "WHERE " + " AND ".join(clauses)
+
+    con = _con()
+    df = con.sql(f"""
+        SELECT
+            cast(supervisor_district as int) as d,
+            count(*) as total_permits,
+            round(median(days_filed_to_issued), 1) as median_days,
+            count(CASE WHEN status IN ('Filed','Approved','filed','approved')
+                        AND issued_date IS NULL
+                        AND filed_date < current_date - INTERVAL '1 year' THEN 1 END) as stuck_permits,
+            coalesce(sum(CASE WHEN status IN ('Filed','Approved','filed','approved')
+                        AND issued_date IS NULL
+                        AND filed_date < current_date - INTERVAL '1 year'
+                        THEN proposed_units END), 0) as stuck_units,
+            coalesce(sum(CASE WHEN status IN ('Filed','Approved','filed','approved')
+                        AND issued_date IS NULL
+                        AND filed_date < current_date - INTERVAL '1 year'
+                        THEN proposed_units END), 0) * {_CF['household_size']} as people_without_homes,
+            coalesce(sum(CASE WHEN status IN ('Filed','Approved','filed','approved')
+                        AND issued_date IS NULL
+                        AND filed_date < current_date - INTERVAL '1 year'
+                        THEN proposed_units * {_CF['avg_assessed_value_per_unit']}
+                             * {_CF['property_tax_rate']}
+                             * (current_date - filed_date::date) / 365.0 END), 0) as property_tax_lost
+        FROM '{_PARQUET}' {w}
+        GROUP BY supervisor_district
+        ORDER BY stuck_units DESC
+    """).fetchdf()
+    records = df.to_dict(orient="records")
+    for r in records:
+        r["supervisor"] = SUPERVISORS.get(str(r["d"]), "Unknown")
+    return records
+
+
+def worst_stuck_narratives(
+    districts: list[str] | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    """Top stuck permits ranked by impact (units * days), with narrative data."""
+    w = _stuck_where(districts, year_min, year_max)
+    con = _con()
+    df = con.sql(f"""
+        SELECT
+            permit_number,
+            filed_date,
+            status,
+            current_date - filed_date::date as days_waiting,
+            round((current_date - filed_date::date) / 365.0, 1) as years_waiting,
+            'District ' || cast(supervisor_district as int) as district,
+            neighborhoods_analysis_boundaries as neighborhood,
+            proposed_units as units,
+            round(proposed_units * {_CF['household_size']}, 0) as people_affected,
+            round(proposed_units * {_CF['median_rent_1br_monthly']}
+                  * (current_date - filed_date::date) / 30.0, 0) as rent_revenue_lost,
+            coalesce(street_number, '') || ' ' || coalesce(street_name, '') || ' '
+                || coalesce(street_suffix, '') as address,
+            description
+        FROM '{_PARQUET}' {w}
+            AND supervisor_district IS NOT NULL
+        ORDER BY proposed_units * (current_date - filed_date::date) DESC
+        LIMIT {int(limit)}
+    """).fetchdf()
+    return json.loads(df.to_json(orient="records", date_format="iso"))
