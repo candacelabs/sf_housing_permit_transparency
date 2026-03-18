@@ -1,4 +1,5 @@
 """Configuration for the SF Permitting Bottleneck Analyzer."""
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -68,6 +69,6 @@ POLICY_MILESTONES = {
 }
 
 # Dashboard settings
-DASH_HOST = "127.0.0.1"
+DASH_HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 DASH_PORT = 8050
 DASH_DEBUG = True

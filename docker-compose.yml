@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DASH_HOST=0.0.0.0

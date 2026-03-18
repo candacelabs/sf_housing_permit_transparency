@@ -14,3 +14,32 @@ dependencies = [
     "requests>=2.32.5",
     "sodapy>=2.2.0",
 ]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pandas-stubs>=3.0.0.260204",
+    "pytest>=9.0.2",
+    "types-jinja2>=2.11.9",
+    "types-requests>=2.32.4.20260107",
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sodapy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "dash.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "dash_bootstrap_components.*"
+ignore_missing_imports = true
