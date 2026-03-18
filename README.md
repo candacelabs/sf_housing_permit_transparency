@@ -67,12 +67,31 @@ Four interactive tabs, all with dynamic filtering by district, year range, and p
 | DBI Building Permits | 1,284,538 | [data.sfgov.org](https://data.sfgov.org/Housing-and-Buildings/Building-Permits/i98e-djp9) |
 | MOHCD Affordable Housing Pipeline | 194 | [data.sfgov.org](https://data.sfgov.org/Housing-and-Buildings/Mayor-s-Office-of-Housing-and-Community-Developmen/aaxw-2cb8) |
 
-## Docker
+## Production deployment
 
 ```bash
-docker compose up --build
-# Dashboard at http://localhost:8050
+# First time: fetch + clean data locally
+just fetch       # downloads ~300MB from DataSF
+just clean       # parses and saves to data/processed/
+
+# Start the container (mounts your local data/)
+docker compose up --build -d
+
+# Dashboard at http://your-server:8050
 ```
+
+To refresh data later:
+```bash
+just fetch && just clean
+docker compose restart
+```
+
+Logs:
+```bash
+docker compose logs -f
+```
+
+The container auto-restarts on crash, debug/reload is off, and it binds to `0.0.0.0`.
 
 ## Project structure
 
