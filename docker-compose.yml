@@ -1,5 +1,5 @@
 services:
-  app:
+  sf-housing:
     build: .
     ports:
       - "8050:8050"
