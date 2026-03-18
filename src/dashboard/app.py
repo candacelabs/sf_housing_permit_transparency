@@ -92,7 +92,7 @@ tailwind.config = {
     </div>
     <div class="w-24">
       <label class="block text-xs font-medium text-gray-500 mb-1">Year From</label>
-      <input type="number" id="f-year-min" value="{{ filters.min_year | int }}" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" class="filter-input">
+      <input type="number" id="f-year-min" value="2010" min="{{ filters.min_year | int }}" max="{{ filters.max_year | int }}" onchange="refresh()" class="filter-input">
     </div>
     <div class="w-24">
       <label class="block text-xs font-medium text-gray-500 mb-1">Year To</label>

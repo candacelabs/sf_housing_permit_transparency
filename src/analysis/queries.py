@@ -30,7 +30,8 @@ def _where_clause(
     """Build a WHERE clause from filter parameters. Always returns 'WHERE ...'."""
     clauses = ["true"]
     if housing_only:
-        clauses.append("is_housing = true")
+        # net_new_units > 0 captures actual housing production, not minor alterations
+        clauses.append("net_new_units > 0")
     if districts:
         quoted = ", ".join(f"'{d}'" for d in districts)
         clauses.append(f"supervisor_district IN ({quoted})")
@@ -122,7 +123,7 @@ def by_district(
     con = _con()
     return con.sql(f"""
         SELECT
-            supervisor_district as district,
+            'District ' || cast(supervisor_district as int) as district,
             median(days_filed_to_issued) as median_days,
             count(*) as permits,
             sum(proposed_units) as units_proposed
@@ -212,7 +213,7 @@ def stuck_permits_list(
 ) -> pd.DataFrame:
     """Permits stuck in the pipeline, sorted by wait time."""
     extra_clauses = [
-        "is_housing = true",
+        "net_new_units > 0",
         "status IN ('Filed', 'Approved', 'filed', 'approved')",
         "issued_date IS NULL",
         f"filed_date < current_date - INTERVAL '{int(threshold_days)} days'",
@@ -233,7 +234,7 @@ def stuck_permits_list(
             filed_date,
             status,
             current_date - filed_date::date as days_waiting,
-            supervisor_district as district,
+            'District ' || cast(supervisor_district as int) as district,
             neighborhoods_analysis_boundaries as neighborhood,
             proposed_units as units,
             left(description, 120) as description
@@ -250,7 +251,7 @@ def stuck_by_district(
 ) -> pd.DataFrame:
     """Stuck permits aggregated by district."""
     extra_clauses = [
-        "is_housing = true",
+        "net_new_units > 0",
         "status IN ('Filed', 'Approved', 'filed', 'approved')",
         "issued_date IS NULL",
         "filed_date < current_date - INTERVAL '1 year'",
@@ -268,7 +269,7 @@ def stuck_by_district(
     con = _con()
     return con.sql(f"""
         SELECT
-            supervisor_district as district,
+            'District ' || cast(supervisor_district as int) as district,
             count(*) as stuck_permits,
             coalesce(sum(proposed_units), 0) as stuck_units
         FROM '{_PARQUET}' {where}
@@ -297,7 +298,7 @@ def policy_impact() -> list[dict]:
                            AND filed_date < '{date_str}'::date + INTERVAL '1 year'
                       THEN 1 END) as permits_after
             FROM '{_PARQUET}'
-            WHERE is_housing = true
+            WHERE net_new_units > 0
         """).fetchone()
         pct = None
         if row[0] and row[1] and row[0] != 0:
@@ -338,20 +339,20 @@ def filter_options() -> dict:
     """Get available filter values for the UI."""
     con = _con()
     districts = con.sql(f"""
-        SELECT DISTINCT supervisor_district
+        SELECT DISTINCT cast(supervisor_district as int) as d
         FROM '{_PARQUET}'
         WHERE supervisor_district IS NOT NULL
-        ORDER BY supervisor_district
-    """).fetchdf()["supervisor_district"].tolist()
+        ORDER BY d
+    """).fetchdf()["d"].tolist()
 
     years = con.sql(f"""
         SELECT min(filed_year) as min_year, max(filed_year) as max_year
         FROM '{_PARQUET}'
-        WHERE filed_year IS NOT NULL
+        WHERE filed_year IS NOT NULL AND filed_year >= 1980
     """).fetchone()
 
     return {
-        "districts": districts,
-        "min_year": int(years[0]) if years[0] else 2000,
+        "districts": [str(d) for d in districts],
+        "min_year": int(years[0]) if years[0] else 1980,
         "max_year": int(years[1]) if years[1] else 2026,
     }
