@@ -4,12 +4,15 @@ Provides quarterly, annual, seasonal, policy-impact, and district-level
 trend analyses on housing permit processing durations.
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 
 from src.config import POLICY_MILESTONES
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +53,7 @@ def quarterly_trends(
         year, quarter, period, median_{metric}, count,
         total_units_proposed, rolling_avg
     """
+    logger.info("Computing quarterly trends for %s...", metric)
     housing = _housing_only(df)
 
     grouped = housing.groupby(["filed_year", "filed_quarter"]).agg(
@@ -93,6 +97,7 @@ def annual_trends(df: pd.DataFrame) -> pd.DataFrame:
     """Annual summary with median durations for every stage, permit counts,
     unit counts, and year-over-year percent change for each numeric column.
     """
+    logger.info("Computing annual trends...")
     housing = _housing_only(df)
 
     agg_dict: dict[str, tuple[str, str]] = {}
@@ -133,6 +138,7 @@ def seasonal_patterns(
 
     Returns columns: quarter, label, mean_{metric}, median_{metric}, count
     """
+    logger.info("Computing seasonal patterns for %s...", metric)
     housing = _housing_only(df)
 
     grouped = (
@@ -174,6 +180,7 @@ def policy_impact_analysis(df: pd.DataFrame) -> list[dict]:
         date, event, median_before, median_after, pct_change,
         permits_before, permits_after
     """
+    logger.info("Running policy impact analysis...")
     housing = _housing_only(df).copy()
 
     # Ensure filed_date is datetime
@@ -229,6 +236,7 @@ def district_trend(
 
     Returns the same shape as quarterly_trends but filtered to one district.
     """
+    logger.info("Computing district trend for district %s...", district)
     housing = _housing_only(df)
     district_df = housing[housing["supervisor_district"] == district].copy()
 
@@ -279,6 +287,7 @@ def get_all_trends(df: pd.DataFrame) -> dict:
         quarterly, annual, seasonal, policy_impact,
         district_trends (dict of district -> DataFrame)
     """
+    logger.info("Running all trend analyses...")
     results: dict = {}
 
     results["quarterly"] = quarterly_trends(df)

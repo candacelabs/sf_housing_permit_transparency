@@ -1,8 +1,12 @@
 """Generate HTML policy brief from analysis results."""
+import logging
+
 import pandas as pd
 from datetime import datetime
 from jinja2 import Environment
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from src.config import PROCESSED_DIR, REPORTS_DIR, POLICY_MILESTONES
 from src.analysis.bottlenecks import (
@@ -134,6 +138,7 @@ def _df_to_html(df, max_rows=30):
 
 def generate_report(df: pd.DataFrame) -> Path:
     """Generate HTML policy brief and save to reports/ directory."""
+    logger.info("Starting report generation...")
     housing = df[df["is_housing"] == True] if "is_housing" in df.columns else df
     stuck = stuck_permits(df)
     scorecard = district_scorecard(df)
@@ -198,7 +203,7 @@ def generate_report(df: pd.DataFrame) -> Path:
 
     output_path = REPORTS_DIR / "bottleneck_report.html"
     output_path.write_text(html)
-    print(f"Report generated: {output_path}")
+    logger.info("Report generated: %s", output_path)
     return output_path
 
 

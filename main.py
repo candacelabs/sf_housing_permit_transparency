@@ -8,14 +8,17 @@ Usage:
     uv run python main.py dashboard  # Launch interactive Dash dashboard
     uv run python main.py pipeline   # Run full pipeline (fetch → clean → report → dashboard)
 """
+import logging
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def cmd_fetch():
     from src.ingestion.fetch import fetch_all
     data = fetch_all()
     for name, df in data.items():
-        print(f"  {name}: {len(df):,} rows")
+        logger.info("  %s: %s rows", name, f"{len(df):,}")
 
 
 def cmd_clean():
@@ -24,7 +27,7 @@ def cmd_clean():
     raw = fetch_all()  # Uses cache if available
     clean = get_clean_data(raw)
     for name, df in clean.items():
-        print(f"  {name}: {len(df):,} rows (cleaned)")
+        logger.info("  %s: %s rows (cleaned)", name, f"{len(df):,}")
 
 
 def cmd_analyze():
@@ -40,20 +43,18 @@ def cmd_analyze():
     results = get_all_analyses(df)
     stuck = stuck_permits(df)
 
-    print("\n=== SF Permitting Bottleneck Analysis ===\n")
+    logger.info("=== SF Permitting Bottleneck Analysis ===")
     housing = df[df["is_housing"] == True] if "is_housing" in df.columns else df
-    print(f"Total housing permits: {len(housing):,}")
-    print(f"Median days filed→issued: {housing['days_filed_to_issued'].median():.0f}")
-    print(f"Stuck permits (>1yr): {len(stuck):,}")
+    logger.info("Total housing permits: %s", f"{len(housing):,}")
+    logger.info("Median days filed→issued: %.0f", housing['days_filed_to_issued'].median())
+    logger.info("Stuck permits (>1yr): %s", f"{len(stuck):,}")
     if "proposed_units" in stuck.columns:
-        print(f"Housing units blocked: {stuck['proposed_units'].sum():,.0f}")
-    print()
+        logger.info("Housing units blocked: %s", f"{stuck['proposed_units'].sum():,.0f}")
 
     for name, result in results.items():
         if hasattr(result, 'shape'):
-            print(f"--- {name} ({result.shape[0]} rows) ---")
-            print(result.head(10).to_string())
-            print()
+            logger.info("--- %s (%d rows) ---", name, result.shape[0])
+            logger.info("\n%s", result.head(10).to_string())
 
 
 def cmd_report():
@@ -71,19 +72,19 @@ def cmd_report():
 def cmd_dashboard():
     from src.dashboard.app import create_app
     app = create_app()
-    print("\nStarting dashboard at http://127.0.0.1:8050")
-    print("Press Ctrl+C to stop.\n")
+    logger.info("Starting dashboard at http://127.0.0.1:8050")
+    logger.info("Press Ctrl+C to stop.")
     app.run()
 
 
 def cmd_pipeline():
-    print("Step 1/4: Fetching data from DataSF...")
+    logger.info("Step 1/4: Fetching data from DataSF...")
     cmd_fetch()
-    print("\nStep 2/4: Cleaning data...")
+    logger.info("Step 2/4: Cleaning data...")
     cmd_clean()
-    print("\nStep 3/4: Generating report...")
+    logger.info("Step 3/4: Generating report...")
     cmd_report()
-    print("\nStep 4/4: Launching dashboard...")
+    logger.info("Step 4/4: Launching dashboard...")
     cmd_dashboard()
 
 
@@ -98,8 +99,11 @@ COMMANDS = {
 
 
 def main():
+    from src.config import setup_logging
+    setup_logging()
+
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        print(__doc__)
+        logger.error("Usage: uv run python main.py {fetch|clean|analyze|report|dashboard|pipeline}")
         sys.exit(1)
     COMMANDS[sys.argv[1]]()
 

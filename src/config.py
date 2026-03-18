@@ -72,3 +72,39 @@ POLICY_MILESTONES = {
 DASH_HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 DASH_PORT = 8050
 DASH_DEBUG = True
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+import logging
+import sys
+
+
+def setup_logging() -> logging.Logger:
+    """Configure the root logger for the application.
+
+    Sets level to DEBUG when the ``SF_PERMIT_DEBUG`` environment variable is
+    ``"1"``, otherwise INFO.  Adds a single :class:`~logging.StreamHandler`
+    writing to *stderr* so log output never mingles with data on *stdout*.
+
+    Returns the root :class:`~logging.Logger`.
+    """
+    level = logging.DEBUG if os.environ.get("SF_PERMIT_DEBUG") == "1" else logging.INFO
+
+    fmt = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(fmt)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Avoid duplicate handlers if setup_logging is called more than once
+    if not root.handlers:
+        root.addHandler(handler)
+
+    return root

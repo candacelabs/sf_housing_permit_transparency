@@ -4,6 +4,7 @@ Provides functions to identify delays, stuck permits, and district-level
 scorecards from the processed building-permits DataFrame.
 """
 
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -11,6 +12,8 @@ import numpy as np
 import pandas as pd
 
 from src.config import HOUSING_PERMIT_TYPES
+
+logger = logging.getLogger(__name__)
 
 # Duration columns used across multiple analyses
 DURATION_COLUMNS = [
@@ -46,6 +49,7 @@ def stage_duration_summary(
         One row per duration column (or per group x duration column) with
         median, mean, p25, p75, and p90.
     """
+    logger.info("Computing stage duration summary...")
     housing = _housing_only(df)
 
     agg_funcs = {
@@ -109,6 +113,7 @@ def worst_bottlenecks(
         Top *top_n* groups sorted by median duration descending, with
         median, mean, p75, p90, and count.
     """
+    logger.info("Finding worst bottlenecks by %s...", group_by)
     housing = _housing_only(df)
 
     grouped = housing.groupby(group_by)[stage].agg(
@@ -141,6 +146,7 @@ def permit_status_breakdown(
     pd.DataFrame
         Counts and percentages per status (and per group if given).
     """
+    logger.info("Computing permit status breakdown...")
     if group_by is not None:
         counts = df.groupby([group_by, "status"]).size().reset_index(name="count")
         totals = counts.groupby(group_by)["count"].transform("sum")
@@ -174,6 +180,7 @@ def stuck_permits(
     pd.DataFrame
         Stuck permits sorted by *days_waiting* descending.
     """
+    logger.info("Finding stuck permits (threshold: %d days)...", threshold_days)
     today = pd.Timestamp(datetime.today().date())
 
     # Permits that are filed or approved but not issued
@@ -222,6 +229,7 @@ def volume_analysis(
         Counts of filed, issued, completed permits and sum of net_new_units
         per group.
     """
+    logger.info("Running volume analysis by %s...", group_by)
     filed = df.groupby(group_by).size().reset_index(name="permits_filed")
 
     issued_mask = df["issued_date"].notna()
@@ -265,6 +273,7 @@ def district_scorecard(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         One row per district, sorted by *bottleneck_score* descending.
     """
+    logger.info("Building district scorecard...")
     col = "supervisor_district"
 
     # Median days to issuance (housing only)
@@ -323,6 +332,7 @@ def get_all_analyses(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     -------
     dict[str, pd.DataFrame]
     """
+    logger.info("Running all bottleneck analyses...")
     return {
         "stage_duration_summary": stage_duration_summary(df),
         "worst_bottlenecks": worst_bottlenecks(df),

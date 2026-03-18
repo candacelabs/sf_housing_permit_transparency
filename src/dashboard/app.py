@@ -2,12 +2,16 @@
 
 Designed for policymakers: clear, simple, impactful.
 """
+import logging
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, callback, Input, Output, State
 import dash_bootstrap_components as dbc
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from src.config import (
     PROCESSED_DIR, DASH_HOST, DASH_PORT, DASH_DEBUG,
@@ -34,6 +38,7 @@ def load_data() -> pd.DataFrame:
             "  uv run python -m src.ingestion.fetch\n"
             "  uv run python -m src.ingestion.clean"
         )
+    logger.info("Loading processed data from %s", path)
     df = pd.read_parquet(path)
     # Ensure date columns are datetime
     for col in ["filed_date", "approved_date", "issued_date", "completed_date"]:
@@ -514,6 +519,7 @@ def create_app():
     df = load_data()
     app.layout = build_layout(df)
     register_callbacks(df)
+    logger.info("Dashboard app created and ready to serve")
     return app
 
 

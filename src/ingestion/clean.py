@@ -79,6 +79,20 @@ def clean_building_permits(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     logger.info("Cleaning building permits: %d rows", len(df))
 
+    # -- Normalize column names to snake_case --------------------------------
+    # CSV exports use title case ("Permit Type"), Socrata API uses snake_case
+    df.columns = (
+        df.columns.str.strip()
+        .str.lower()
+        .str.replace(" ", "_", regex=False)
+    )
+    # Handle known column name differences between CSV and API
+    col_renames = {
+        "current_status": "status",
+        "current_status_date": "status_date",
+    }
+    df = df.rename(columns={k: v for k, v in col_renames.items() if k in df.columns})
+
     # -- Parse date columns --------------------------------------------------
     for col in _BUILDING_PERMIT_DATE_COLUMNS:
         if col in df.columns:
